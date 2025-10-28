@@ -18,6 +18,7 @@ import openhands.agenthub  # noqa F401 (we import this to get the agents registe
 from openhands.app_server import v1_router
 from openhands.app_server.config import get_app_lifespan_service
 from openhands.integrations.service_types import AuthenticationError
+from openhands.server.routes.a2a import app as a2a_router
 from openhands.server.routes.conversation import app as conversation_api_router
 from openhands.server.routes.feedback import app as feedback_api_router
 from openhands.server.routes.files import app as files_api_router
@@ -93,4 +94,5 @@ if server_config.app_mode == AppMode.OSS:
 if server_config.enable_v1:
     app.include_router(v1_router.router)
 app.include_router(trajectory_router)
+app.include_router(a2a_router)
 add_health_endpoints(app)
