@@ -11,7 +11,7 @@ jsonrpc_app = A2AFastAPIApplication(
 )
 
 fastapi_app = jsonrpc_app.build(
-    agent_card_url = '/.well-known/agent.json',
+    agent_card_url = '/a2a/.well-known/agent-card.json',
     rpc_url = '/a2a',
 )
 

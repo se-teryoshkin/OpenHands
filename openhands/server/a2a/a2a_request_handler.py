@@ -42,7 +42,8 @@ from openhands.server.shared import (
     server_config,
 )
 from openhands.server.types import AppMode
-from openhands.storage.data_models.user_secrets import UserSecrets
+from openhands.storage.data_models.secrets import Secrets
+from openhands.utils.utils import create_registry_and_conversation_stats
 
 
 @trace_class(kind=SpanKind.SERVER)
@@ -73,10 +74,17 @@ class A2aRequestHandler:
         if task_id in A2aRequestHandler._task_id_to_sessions:
             session = A2aRequestHandler._task_id_to_sessions[task_id]
         else:
+
+            llm_registry, conversation_stats, config_ = (
+                create_registry_and_conversation_stats(config=config, sid=task_id, user_id=None)
+            )
+
             session = Session(
                 sid=task_id,
                 file_store=file_store,
                 config=config,
+                llm_registry=llm_registry,
+                conversation_stats=conversation_stats,
                 sio=None,
             )
 
@@ -259,7 +267,7 @@ class A2aRequestHandler:
         settings = await settings_store.load()
 
         secrets_store = await SecretsStoreImpl.get_instance(config, user_id=task_id)
-        user_secrets: UserSecrets | None = await secrets_store.load()
+        user_secrets: Secrets | None = await secrets_store.load()
 
         if not settings:
             raise ConnectionRefusedError(
