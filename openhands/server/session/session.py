@@ -1,6 +1,7 @@
 import asyncio
 import time
 from logging import LoggerAdapter
+from typing import Callable
 
 import socketio
 
@@ -462,6 +463,28 @@ class WebSession:
         asyncio.run_coroutine_threadsafe(
             self._send_status_message(msg_type, runtime_status, message), self.loop
         )
+
+
+class A2AWebSession(WebSession):
+
+    def __init__(
+            self,
+            sid: str,
+            config: OpenHandsConfig,
+            llm_registry: LLMRegistry,
+            conversation_stats: ConversationStats,
+            file_store: FileStore,
+            sio: socketio.AsyncServer | None,
+            events_callback: Callable | None = None,
+            user_id: str | None = None,
+    ):
+        super().__init__(sid, config, llm_registry, conversation_stats, file_store, sio, user_id)
+        self.events_callback = events_callback
+
+    async def _on_event(self, event: Event) -> None:
+        if self.events_callback is not None:
+            self.events_callback(event)
+        return await super()._on_event(event)
 
 
 # Backward-compatible alias for external imports that still reference
