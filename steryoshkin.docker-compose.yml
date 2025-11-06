@@ -16,7 +16,6 @@ services:
       LLM_BASE_URL: "http://a6k2.dgx:34000"
       LLM_PROVIDER: "hosted_vllm"
       LLM_MODEL: "hosted_vllm/qwen3-32b"
-      SANDBOX_VOLUMES: "/mnt/hgfs/Projects/MAS/OpenHands-Fork/.misc/web-instance/workspace:/workspace:rw"
     ports:
       - "3000:3000"
     extra_hosts:

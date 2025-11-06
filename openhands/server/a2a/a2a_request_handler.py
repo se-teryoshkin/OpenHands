@@ -224,6 +224,7 @@ class A2AOHTaskWrapper:
                             and agent_state == AgentState.AWAITING_USER_INPUT
                             and isinstance(event, AgentStateChangedObservation)
                     ):
+                        # TODO: Add log message
                         self.session.oh_session.agent_session.runtime.event_stream.add_event(
                             MessageAction(content=AUTO_CONTINUE_RESPONSE),
                             EventSource.USER,
