@@ -78,8 +78,15 @@ class A2AOHTaskWrapper:
         self.events: dict[int, Event] = dict()
         self.is_finished = False
 
-        self.auto_continue = metadata.get(f"{METADATA_NAME_PREFIX}/auto-continue", False)
-        self.show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
+        # TODO: Разобраться с багом, почему-то метаданные не всегда прокидываются
+        auto_continue = metadata.get(f"{METADATA_NAME_PREFIX}/auto-continue", False)
+        show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
+
+        metadata[f"{METADATA_NAME_PREFIX}/auto-continue"] = auto_continue
+        metadata[f"{METADATA_NAME_PREFIX}/show-all-events"] = show_all_events
+
+        self.auto_continue = auto_continue
+        self.show_all_events = show_all_events
         self.metadata = metadata
 
         session.add_task(self)
