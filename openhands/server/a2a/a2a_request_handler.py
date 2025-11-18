@@ -94,6 +94,9 @@ class A2AOHTaskWrapper:
         # TODO: Add artifacts (zip-file with code).
         #  Reference: openhands.server.routes.files.py::zip_current_workspace::185
 
+    def __repr__(self) -> str:
+        return (f"Task(id={self.task_id}, status={self.status}, "
+                f"history_length={len(self.history)}, metadata={self.metadata})")
 
     @property
     def context_id(self):
@@ -168,7 +171,7 @@ class A2AOHTaskWrapper:
             context_id=self.context_id,
             status=self.status,
             history=history,
-            metadata=self.metadata,
+            metadata=copy(self.metadata),
         )
 
     def on_event(self, event: Event) -> None:
@@ -299,6 +302,9 @@ class A2AOHSessionWrapper:
 class A2aRequestHandler:
 
     _tasks: dict[str, A2AOHTaskWrapper] = dict()
+
+    # TODO: Бесшовно интегрировать с имеющимися сессиями.
+    #  Нужно подтягивать в том числе и обычные сессии, а не только A2A.
     _sessions: dict[str, A2AOHSessionWrapper] = dict()
 
     def _get_task_by_id(self, task_id: str) -> A2AOHTaskWrapper:
@@ -323,6 +329,8 @@ class A2aRequestHandler:
         self, params: MessageSendParams, context
     ) -> A2AMessage | Task:
 
+        logger.debug(f"A2AMessageSendParams: {params}")
+
         # TODO: Add support for MessageSendConfiguration
         # TODO: Add reject in case of params.configuration.blocking is True
         task_id = params.message.task_id
@@ -339,7 +347,7 @@ class A2aRequestHandler:
             else:
                 session = self._sessions[context_id]
 
-            task = A2AOHTaskWrapper(task_id, session, params.metadata)
+            task = A2AOHTaskWrapper(task_id=task_id, session=session, metadata=copy(params.metadata))
             self._tasks[task.task_id] = task
 
         else:
@@ -357,6 +365,7 @@ class A2aRequestHandler:
         if not task.session.is_started():
             task.history.append(
                 A2AMessage(
+                    context_id=task.context_id,
                     role=Role.agent,
                     parts=[TextPart(text="server is preparing")],
                     message_id=uuid4().hex,
