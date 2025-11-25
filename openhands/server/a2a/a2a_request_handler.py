@@ -1,4 +1,6 @@
 import asyncio
+import os
+import base64
 from collections.abc import AsyncGenerator
 from copy import copy
 from datetime import datetime, timezone, UTC
@@ -7,6 +9,7 @@ from uuid import uuid4
 
 from a2a.server.events import Event as A2AEvent
 from a2a.types import (
+    Artifact,
     Message as A2AMessage,
     MessageSendParams,
     Role,
@@ -20,10 +23,12 @@ from a2a.types import (
     UnsupportedOperationError,
     InvalidParamsError,
     TextPart,
+    FilePart, FileWithBytes
 )
 from a2a.utils.errors import ServerError
 from a2a.utils.telemetry import SpanKind, trace_class
 
+from openhands.core.exceptions import AgentRuntimeUnavailableError
 from openhands.core.logger import openhands_logger as logger
 from openhands.core.schema import ActionType
 from openhands.core.schema.agent import AgentState
@@ -32,6 +37,7 @@ from openhands.events.action import NullAction, SystemMessageAction, RecallActio
 from openhands.events.event import Event, EventSource
 from openhands.events.observation import NullObservation
 from openhands.events.observation.agent import AgentStateChangedObservation, RecallObservation
+from openhands.runtime import Runtime
 from openhands.server.session.conversation_init_data import ConversationInitData
 from openhands.server.session.session import A2AWebSession
 from openhands.server.shared import (
@@ -72,6 +78,7 @@ class A2AOHTaskWrapper:
             state=TaskState.submitted,
         )
         self.history: list[A2AMessage] = list()
+        self.artifacts: list[Artifact] = list()
         self.min_event_id = -1
         self.max_event_id = -1
         self.session = session
@@ -165,12 +172,17 @@ class A2AOHTaskWrapper:
         else:
             history = self.history
 
+        artifacts = None
+        if self.status.state is TaskState.completed and len(self.artifacts) > 0:
+            artifacts = self.artifacts
+
         return Task(
             id=self.task_id,
             context_id=self.context_id,
             status=self.status,
             history=history,
             metadata=copy(self.metadata),
+            artifacts=artifacts
         )
 
     def on_event(self, event: Event) -> None:
@@ -248,9 +260,37 @@ class A2AOHTaskWrapper:
                 pass
 
         if self.is_finished:
+            file = self.zip_current_workspace()
+            if file is not None:
+                self.artifacts.append(Artifact(
+                    artifactId=uuid4().hex,
+                    parts=[FilePart(file=file)]
+                ))
             # TODO: # Add finish processing (for example, close stream, create artifacts, etc)
             ...
 
+    def zip_current_workspace(self) -> FileWithBytes | None:
+        try:
+            logger.debug('Zipping workspace')
+            runtime: Runtime = self.session.oh_session.agent_session.runtime
+            path = runtime.config.workspace_mount_path_in_sandbox
+            try:
+                zip_file_path = runtime.copy_from(path)
+            except AgentRuntimeUnavailableError as e:
+                logger.error(f'Error zipping workspace: {e}')
+                return
+
+            zip_b64 = base64.b64encode(zip_file_path.read_bytes())
+            file = FileWithBytes(
+                name='workspace.zip',
+                mime_type='application/zip',
+                bytes=zip_b64
+            )
+            os.unlink(zip_file_path)
+            return file
+
+        except Exception as e:
+            logger.error(f'Error zipping workspace: {e}')
 
 class A2AOHSessionWrapper:
 
