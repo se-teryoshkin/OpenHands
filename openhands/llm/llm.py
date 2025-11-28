@@ -490,7 +490,7 @@ class LLM(RetryMixin, DebugMixin):
         from openhands.io import json
 
         logger.debug(
-            f'Model info: {json.dumps({"model": self.config.model, "base_url": self.config.base_url}, indent=2)}'
+            f'Model info: {json.dumps(self.config.model_dump(mode="json"), indent=2)}'
         )
 
         if self.config.model.startswith('huggingface'):

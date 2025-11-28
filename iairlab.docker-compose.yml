@@ -1,0 +1,51 @@
+
+services:
+  openhands:
+    build:
+      context: ./
+      dockerfile: ./containers/app/Dockerfile
+    image: openhands-local-version-a2a:0.1
+    container_name: openhands-instance-local-version
+    environment:
+
+      # Настройки для корректной работы A2A well-known uri.
+      BACKEND_HOST: "192.168.145.147"
+      BACKEND_PORT: "3000"
+
+      # Настройки sandbox: используемый образ, дополнительные ENV и volumes
+      SANDBOX_RUNTIME_CONTAINER_IMAGE: "node2.bdcl:5000/all-hands-ai/runtime:0.59-nikolaik-appfactory-components"
+      SANDBOX_RUNTIME_STARTUP_ENV_VARS: "{'APPFACTORY_MOCK': '1'}"
+
+      SANDBOX_VOLUMES: "/path/to/appfactory-components/docs:/appfactory_docs:ro,/path/to/dir/with/specs:/specs:ro,/optional/path/to/appfactory-components:/appfactory_components:ro"
+
+      LOG_ALL_EVENTS: "true"
+      DEBUG: "true"
+
+      LLM_API_KEY: "REMOVED"
+      LLM_BASE_URL: "https://foundation-models.api.cloud.ru/v1"
+      LLM_PROVIDER: "hosted_vllm"
+      LLM_MODEL: "hosted_vllm/Qwen/Qwen3-Coder-480B-A35B-Instruct"
+      LLM_TEMPERATURE: "0.7"
+      LLM_TOP_P: "0.8"
+      LLM_TOP_K: "20"
+      LLM_COMPLETION_KWARGS: '{"repetition_penalty": 1.05}'
+
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "a6k2.dgx:10.32.15.89"
+      - "d.dgx:10.32.2.11"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Путь, где веб-инстанс будет хранить свои настройки. Перед запуском можно просто пустую директорию создать.
+      - /path/to/web-instance/settings-dir:/.openhands:z
+
+      # Аналогично, только для хранения данных о переписках, событиях и т.д.
+      - /path/to/web-instance/workspace-dir:/opt/workspace_base:z
+
+      # (Опционально) Путь до кода OpenHands. Полезно для разработки, чтобы не требовалось каждый раз пересобирать образ.
+      - ./openhands:/app/openhands:z
+      - ./microagents:/app/microagents:z
+      - ./containers/app/entrypoint.sh:/app/entrypoint.sh:ro
