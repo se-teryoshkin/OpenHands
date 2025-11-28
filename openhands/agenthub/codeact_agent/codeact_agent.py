@@ -31,8 +31,12 @@ from openhands.controller.agent import Agent
 from openhands.controller.state.state import State
 from openhands.core.config import AgentConfig
 from openhands.core.logger import openhands_logger as logger
-from openhands.core.message import Message
-from openhands.events.action import AgentFinishAction, MessageAction
+from openhands.core.message import Message, TextContent
+from openhands.events.action import (
+    AgentFinishAction,
+    MessageAction,
+    TaskTrackingAction,
+)
 from openhands.events.event import Event
 from openhands.llm.llm_utils import check_tools
 from openhands.memory.condenser import Condenser
@@ -207,6 +211,29 @@ class CodeActAgent(Agent):
 
         initial_user_message = self._get_initial_user_message(state.history)
         messages = self._get_messages(condensed_history, initial_user_message)
+
+        if self.config.enable_plan_mode:
+            # Check if a task list has been created in the history
+            has_plan = False
+            for event in state.history:
+                if isinstance(event, TaskTrackingAction) and event.command == 'plan':
+                    has_plan = True
+                    break
+
+            if not has_plan:
+                # Enforce mandatory task list creation
+                messages.append(
+                    Message(
+                        role='user',
+                        content=[
+                            TextContent(
+                                type='text',
+                                text='Reminder: You must create a task list using the `task_tracker` tool with command `plan` before proceeding. This is mandatory.',
+                            )
+                        ],
+                    )
+                )
+
         params: dict = {
             'messages': messages,
         }

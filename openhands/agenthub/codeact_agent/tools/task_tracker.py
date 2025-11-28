@@ -11,33 +11,20 @@ progress effectively to users.
 
 ## Application Guidelines
 
-Utilize this tool in the following situations:
+Utilize this tool in ALL situations:
 
-1. Multi-phase development work - When projects involve multiple sequential or
+1. Task list creation is MANDATORY at the start of every interaction.
+   Before performing any other action, you MUST immediately issue a
+   `task_tracker` `plan` call that captures the scope of the request.
+2. Multi-phase development work - When projects involve multiple sequential or
    parallel activities
-2. Complex implementation tasks - Work requiring systematic planning and
+3. Complex implementation tasks - Work requiring systematic planning and
    coordination across multiple components
-3. Explicit user request for task organization - When users specifically ask
-   for structured task management
-4. Multiple concurrent requirements - When users present several work items
-   that need coordination
-5. Project initiation - Capture and organize user requirements at project start
-6. Work commencement - Update task status to in_progress before beginning
+4. Project initiation - Capture and organize user requirements at project start
+5. Work commencement - Update task status to in_progress before beginning
    implementation. Maintain focus by limiting active work to one task
-7. Task completion - Update status to done and identify any additional work
+6. Task completion - Update status to done and identify any additional work
    that emerged during implementation
-
-## Situations Where Tool Usage Is Unnecessary
-
-Avoid using this tool when:
-
-1. Single atomic tasks that require no decomposition
-2. Trivial operations where tracking adds no organizational value
-3. Simple activities completable in minimal steps
-4. Pure information exchange or discussion
-
-Note: For single straightforward tasks, proceed with direct implementation
-rather than creating tracking overhead.
 
 ## Usage Scenarios
 
@@ -78,29 +65,6 @@ Response approach: I'll help build your blog platform. Let me break down these
 components into manageable implementation phases.
 
 *Creates structured plan with each feature decomposed into specific development tasks*
-
-## Counter-examples - Direct Implementation Preferred
-
-**Counter-example A: Simple inquiry**
-User request: "What's the syntax for a for loop in JavaScript?"
-
-Response approach: Here's how to write a for loop in JavaScript:
-
-```javascript
-for (let i = 0; i < array.length; i++) {
-    console.log(array[i]);
-}
-```
-
-*No task tracking needed - single informational response*
-
-**Counter-example B: Minor modification**
-User request: "Please add a docstring to the processPayment function explaining
-its parameters."
-
-Response approach: I'll add a docstring to explain the processPayment function.
-
-*Direct edit without task tracking for simple modification*
 
 ## Status Management and Workflow
 
