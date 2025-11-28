@@ -16,7 +16,7 @@ services:
       SANDBOX_RUNTIME_CONTAINER_IMAGE: "node2.bdcl:5000/all-hands-ai/runtime:0.59-nikolaik-appfactory-components"
       SANDBOX_RUNTIME_STARTUP_ENV_VARS: "{'APPFACTORY_MOCK': '1'}"
 
-      SANDBOX_VOLUMES: "/path/to/appfactory-components/docs:/appfactory_docs:ro,/path/to/dir/with/specs:/specs:ro,/optional/path/to/appfactory-components:/appfactory_components:ro"
+      SANDBOX_VOLUMES: "/path/to/appfactory-components/docs:/appfactory_docs:ro,/path/to/dir/with/specs:/specs:ro,/optional/path/to/appfactory-components:/appfactory_components:ro,/path/to/dir/with/instructions:/instructions:ro"
 
       LOG_ALL_EVENTS: "true"
       DEBUG: "true"
