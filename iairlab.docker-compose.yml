@@ -14,9 +14,34 @@ services:
 
       # Настройки sandbox: используемый образ, дополнительные ENV и volumes
       SANDBOX_RUNTIME_CONTAINER_IMAGE: "node2.bdcl:5000/all-hands-ai/runtime:0.59-nikolaik-appfactory-components"
-      SANDBOX_RUNTIME_STARTUP_ENV_VARS: "{'APPFACTORY_MOCK': '1'}"
 
-      SANDBOX_VOLUMES: "/path/to/appfactory-components/docs:/appfactory_docs:ro,/path/to/dir/with/specs:/specs:ro,/optional/path/to/appfactory-components:/appfactory_components:ro,/path/to/dir/with/instructions:/instructions:ro"
+      # Для запуска с компонентами в моковом режиме
+      # SANDBOX_RUNTIME_STARTUP_ENV_VARS: "{'APPFACTORY_MOCK': '1'}"
+
+      # Для запуска с полноценной работой компонентов. Требуется развёрнутая инфраструктура.
+      SANDBOX_RUNTIME_STARTUP_ENV_VARS: "\
+      {'APPFACTORY_MOCK': '0', \
+       'APPFACTORY_DLTOOL_SCORING_OPENAI_BASE_URL': 'http://d.dgx:58891/v1', \
+       'APPFACTORY_DLTOOL_SCORING_OPENAI_API_KEY': 'REMOVED', \
+       'APPFACTORY_DLTOOL_SCORING_WEB_DOC_AGENT_LLM_MODEL': '/models/e5-mistral-7b-instruct', \
+       'APPFACTORY_RAG_GENERATOR_BASE_URL': 'http://d.dgx:34000/v1', \
+       'APPFACTORY_RAG_GENERATOR_API_KEY': 'REMOVED', \
+       'APPFACTORY_RAG_GENERATOR_MODEL_NAME': 'gpt-oss-120b', \
+       'APPFACTORY_RAG_TOKENIZER_PATH': '/tokenizer', \
+       'APPFACTORY_RAG_EMBEDDER_BASE_URL': 'http://d.dgx:58892/v1', \
+       'APPFACTORY_RAG_EMBEDDER_API_KEY': 'REMOVED', \
+       'APPFACTORY_RAG_EMBEDDER_MODEL_NAME': '/models/e5-mistral-7b-instruct', \
+       'APPFACTORY_RAG_ELASTICSEARCH_URL': 'node13.bdcl:9200', \
+       'APPFACTORY_RAG_ELASTICSEARCH_USER': 'elastic', \
+       'APPFACTORY_RAG_ELASTICSEARCH_PASSWORD': 'REMOVED'}"
+
+      # Образ sandbox должен содержать следующие директории:
+      #  1. /appfactory_components (из AppFactory-components)
+      #  2. /appfactory_docs (из AppFactory-components)
+      #  3. /instructions (из AppFactory-a2a)
+      #  4. /tokenizer
+      # Иначе их необходимо вмонтировать с помощью volumes.
+      SANDBOX_VOLUMES: "/path/to/dir/with/specs:/specs:ro"
 
       LOG_ALL_EVENTS: "true"
       DEBUG: "true"
@@ -49,3 +74,16 @@ services:
       - ./openhands:/app/openhands:z
       - ./microagents:/app/microagents:z
       - ./containers/app/entrypoint.sh:/app/entrypoint.sh:ro
+
+  #  Нужен для компонента RAG в полноценном режиме работы
+  elasticsearch:
+    image: elasticsearch:8.15.3
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms4G -Xmx4G
+      - xpack.security.enabled=false
+      - ELASTIC_PASSWORD=REMOVED
+    volumes:
+      - ./elasticsearch-data:/usr/share/elasticsearch/data
