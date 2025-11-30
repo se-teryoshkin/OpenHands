@@ -31,7 +31,7 @@ services:
        'APPFACTORY_RAG_EMBEDDER_BASE_URL': 'http://d.dgx:58892/v1', \
        'APPFACTORY_RAG_EMBEDDER_API_KEY': 'REMOVED', \
        'APPFACTORY_RAG_EMBEDDER_MODEL_NAME': '/models/e5-mistral-7b-instruct', \
-       'APPFACTORY_RAG_ELASTICSEARCH_URL': 'node13.bdcl:9200', \
+       'APPFACTORY_RAG_ELASTICSEARCH_URL': 'http://node13.bdcl:9200', \
        'APPFACTORY_RAG_ELASTICSEARCH_USER': 'elastic', \
        'APPFACTORY_RAG_ELASTICSEARCH_PASSWORD': 'REMOVED'}"
 
