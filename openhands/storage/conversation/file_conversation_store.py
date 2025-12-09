@@ -86,10 +86,11 @@ class FileConversationStore(ConversationStore):
         for conversation_id in conversation_ids:
             try:
                 conversations.append(await self.get_metadata(conversation_id))
-            except Exception:
+            except Exception as e:
                 logger.warning(
                     f'Could not load conversation metadata: {conversation_id}'
                 )
+                logger.debug(str(e))
         conversations.sort(key=_sort_key, reverse=True)
         conversations = conversations[start:end]
         next_page_id = offset_to_page_id(end, end < num_conversations)

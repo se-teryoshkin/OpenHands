@@ -18,9 +18,13 @@ class FileSettingsStore(SettingsStore):
 
     async def load(self) -> Settings | None:
         try:
-            json_str = await call_sync_from_async(self.file_store.read, self.path)
-            kwargs = json.loads(json_str)
-            settings = Settings(**kwargs)
+            # FIXME: Temporary disabled settings.json
+            #  All settings should be explicitly set using env
+            # json_str = await call_sync_from_async(self.file_store.read, self.path)
+            # kwargs = json.loads(json_str)
+            # settings = Settings(**kwargs)
+            settings = Settings.from_config()
+            print(f"Settings: {json.dumps(settings.model_dump(mode='json'), indent=2)}")
             return settings
         except FileNotFoundError:
             return None
