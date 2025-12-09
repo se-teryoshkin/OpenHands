@@ -43,6 +43,18 @@ services:
       # Иначе их необходимо вмонтировать с помощью volumes.
       SANDBOX_VOLUMES: "/path/to/dir/with/specs:/specs:ro"
 
+      # Путь, в котором будут создаваться директории под volume отдельных рантаймов.
+      # Каждая директория будет монтироваться только в свой рантайм. Таким образом получаем изолированные
+      # workspace, и содержимое хранится вне контейнера.
+      # Структура:
+      # /path/to/dir/for/multiple/workspaces/
+      #  └── <session_id>/
+      #      ├── pyptoject.toml
+      #      ├── main.py
+      #      ├── code.py
+      #      └── ...
+      SANDBOX_ALL_WORKSPACES_DIR: "/path/to/dir/for/multiple/workspaces"
+
       LOG_ALL_EVENTS: "true"
       DEBUG: "true"
 
@@ -54,6 +66,12 @@ services:
       LLM_TOP_P: "0.8"
       LLM_TOP_K: "20"
       LLM_COMPLETION_KWARGS: '{"repetition_penalty": 1.05}'
+
+      # Настройка суммаризатора: сколько первых событий сохранять
+      CONDENSER_KEEP_FIRST: "15"
+
+      # Настройка суммаризатора: после скольки шагов выполнить суммаризацию.
+      CONDENSER_MAX_SIZE: "400"
 
     ports:
       - "3000:3000"
