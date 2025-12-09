@@ -27,24 +27,26 @@ from a2a.utils.telemetry import SpanKind, trace_class
 from openhands.core.logger import openhands_logger as logger
 from openhands.core.schema import ActionType
 from openhands.core.schema.agent import AgentState
+from openhands.events import EventStreamSubscriber
 from openhands.events.action import NullAction, SystemMessageAction, RecallAction, Action, ChangeAgentStateAction, \
     MessageAction
 from openhands.events.event import Event, EventSource
 from openhands.events.observation import NullObservation
 from openhands.events.observation.agent import AgentStateChangedObservation, RecallObservation
+from openhands.events.serialization import event_from_dict
+from openhands.server.services.conversation_service import create_new_conversation
+from openhands.server.session.agent_session import AgentSession
 from openhands.server.session.conversation_init_data import ConversationInitData
-from openhands.server.session.session import A2AWebSession
 from openhands.server.shared import (
     SecretsStoreImpl,
     SettingsStoreImpl,
     config,
     file_store,
-    server_config,
+    server_config, conversation_manager
 )
 from openhands.server.types import AppMode
 from openhands.storage.data_models.secrets import Secrets
 from openhands.utils.utils import create_registry_and_conversation_stats
-
 
 TASK_TERMINAL_STATES = (TaskState.failed, TaskState.canceled, TaskState.completed, TaskState.rejected)
 METADATA_NAME_PREFIX = "openhands"
@@ -54,13 +56,13 @@ AUTO_CONTINUE_RESPONSE = (
     'IMPORTANT: YOU SHOULD NOT ASK FOR HUMAN RESPONSE UNTIL USER CONTACT YOU HIMSELF.\n'
 )
 
+A2A_UPDATED_AT_CALLBACK_ID = 'a2a_updated_at_callback_id'
 
 class A2AOHTaskWrapper:
 
     def __init__(
             self,
             task_id: str,
-            session: "A2AOHSessionWrapper",
             metadata: dict[str, Any] | None = None,
     ):
 
@@ -74,7 +76,7 @@ class A2AOHTaskWrapper:
         self.history: list[A2AMessage] = list()
         self.min_event_id = -1
         self.max_event_id = -1
-        self.session = session
+        self.agent_session = None
         self.events: dict[int, Event] = dict()
         self.is_finished = False
 
@@ -88,10 +90,12 @@ class A2AOHTaskWrapper:
         self.show_all_events = show_all_events
         self.metadata = metadata
 
-        session.add_task(self)
-
         # TODO: Add artifacts (zip-file with code).
         #  Reference: openhands.server.routes.files.py::zip_current_workspace::185
+
+    def set_session(self, session: "A2AOHSessionWrapper"):
+        self.agent_session = session
+        self.agent_session.add_task(self)
 
     def __repr__(self) -> str:
         return (f"Task(id={self.task_id}, status={self.status}, "
@@ -99,7 +103,7 @@ class A2AOHTaskWrapper:
 
     @property
     def context_id(self):
-        return self.session.context_id
+        return self.agent_session.context_id
 
     def update_status(
             self,
@@ -234,7 +238,7 @@ class A2AOHTaskWrapper:
                             and isinstance(event, AgentStateChangedObservation)
                     ):
                         # TODO: Add log message
-                        self.session.oh_session.agent_session.runtime.event_stream.add_event(
+                        self.agent_session.session.runtime.event_stream.add_event(
                             MessageAction(content=AUTO_CONTINUE_RESPONSE),
                             EventSource.USER,
                         )
@@ -250,11 +254,14 @@ class A2AOHTaskWrapper:
         if self.is_finished:
             # TODO: # Add finish processing (for example, close stream, create artifacts, etc)
             ...
-
+            self.agent_session.session.event_stream.unsubscribe(
+                EventStreamSubscriber.SERVER,
+                A2A_UPDATED_AT_CALLBACK_ID
+            )
 
 class A2AOHSessionWrapper:
 
-    def __init__(self, context_id: str | None):
+    def __init__(self, session: AgentSession, context_id: str | None):
 
         if context_id is None:
             context_id = uuid4().hex
@@ -264,21 +271,13 @@ class A2AOHSessionWrapper:
         )
 
         self.context_id: str = context_id
-        self.oh_session = A2AWebSession(
-            sid=context_id,
-            file_store=file_store,
-            config=config,
-            llm_registry=llm_registry,
-            conversation_stats=conversation_stats,
-            sio=None,
-        )
-
+        self.session = session
         self.tasks: dict[str, A2AOHTaskWrapper] = dict()
 
         self.current_task: A2AOHTaskWrapper | None = None
 
     def is_started(self) -> bool:
-        agent_session = self.oh_session.agent_session
+        agent_session = self.session
         return agent_session.runtime is not None or agent_session.controller is not None
 
     def add_task(self, task: A2AOHTaskWrapper) -> bool:
@@ -292,8 +291,11 @@ class A2AOHSessionWrapper:
         self.current_task = task
 
         # TODO: Add check if agent name stay the same in metadata, otherwise throw an exception.
-
-        self.oh_session.events_callback = task.on_event
+        self.session.event_stream.subscribe(
+                EventStreamSubscriber.SERVER,
+                task.on_event,
+                A2A_UPDATED_AT_CALLBACK_ID,
+            )
         return True
 
 
@@ -337,16 +339,34 @@ class A2aRequestHandler:
             task_id = uuid4().hex
 
         context_id = params.message.context_id
+        task = A2AOHTaskWrapper(task_id=task_id, metadata=copy(params.metadata))
 
         if task_id not in self._tasks:
             if context_id is None or context_id not in self._sessions:
+                if context_id is None:
+                    context_id = uuid4().hex
+
                 # FIXME: Не уверен, что допустимо генерить context_id на стороне клиента
-                session = A2AOHSessionWrapper(context_id=context_id)
-                self._sessions[session.context_id] = session
+                init_data = await self._conversation_init_data_set(task=task, params=params)
+                await create_new_conversation(
+                    user_id=None,
+                    git_provider_tokens=init_data.git_provider_tokens,
+                    git_provider=init_data.git_provider,
+                    custom_secrets=init_data.custom_secrets,
+                    selected_repository=init_data.selected_repository,
+                    selected_branch=init_data.selected_branch,
+                    initial_user_msg=None,
+                    image_urls=None,
+                    replay_json=init_data.replay_json,
+                    conversation_id=context_id,
+                    conversation_instructions=init_data.conversation_instructions
+                )
+                session = A2AOHSessionWrapper(conversation_manager.get_agent_session(context_id), context_id=context_id)
+                self._sessions[context_id] = session
             else:
                 session = self._sessions[context_id]
 
-            task = A2AOHTaskWrapper(task_id=task_id, session=session, metadata=copy(params.metadata))
+            task.set_session(session)
             self._tasks[task.task_id] = task
 
         else:
@@ -356,12 +376,13 @@ class A2aRequestHandler:
                 raise ServerError(error=InvalidParamsError(
                     message="The task already is in terminal state, you cannot interact it"
                 ))
+            session = task.agent_session
 
         user_message = copy(params.message)
         user_message.context_id = task.context_id
         task.history.append(user_message)
 
-        if not task.session.is_started():
+        if not task.agent_session.is_started():
             task.history.append(
                 A2AMessage(
                     context_id=task.context_id,
@@ -381,13 +402,14 @@ class A2aRequestHandler:
             self._background_task(params, task)
         )
 
+        await session.session.controller.set_agent_state_to(AgentState.RUNNING)
         return task.to_response(
             history_length=(
                 None
                 if params.configuration is None
                 else params.configuration.history_length
             )
-        )
+         )
 
     async def on_message_send_stream(
         self, params: MessageSendParams
@@ -492,18 +514,40 @@ class A2aRequestHandler:
 
         return conversation_init_data
 
+
     async def _background_task(
             self,
             params: MessageSendParams | TaskQueryParams | TaskIdParams,
             task: A2AOHTaskWrapper
     ) -> None:
 
-        oh_session = task.session.oh_session
-        if not task.session.is_started():
-            await oh_session.initialize_agent(
-                await self._conversation_init_data_set(task, params), None, replay_json=None
-            )
+        if not task.agent_session.is_started():
+            await conversation_manager.maybe_start_agent_loop(task.context_id,
+                                                        self._conversation_init_data_set(task, params),
+                                                        None, replay_json=None)
         data = self._convert_a2a_params_to_dict(params)
-        await oh_session.dispatch(data)
 
+        if task.status.state == TaskState.input_required:
+            task.update_status(TaskState.working)
+
+        await self.dispatch(data, task)
         logger.debug(f"Finished background task for message {params}")
+
+    async def dispatch(self, data: dict, task: A2AOHTaskWrapper) -> None:
+        event = event_from_dict(data.copy())
+
+        if isinstance(event, MessageAction) and event.image_urls:
+            controller = task.agent_session.session.controller
+
+            if controller:
+                if controller.agent.llm.config.disable_vision:
+                    task.agent_session.session.logger.error(
+                        'Support for images is disabled for this model, try without an image.'
+                    )
+                    return
+                if not controller.agent.llm.vision_is_active():
+                    task.agent_session.session.logger.error(
+                        'Model does not support image upload, change to a different model or try without an image.'
+                    )
+                    return
+        task.agent_session.session.event_stream.add_event(event, EventSource.USER)
