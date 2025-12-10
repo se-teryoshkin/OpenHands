@@ -149,6 +149,8 @@ def event_to_dict(event: 'Event') -> dict:
             d['success'] = event.success
     else:
         raise ValueError(f'Event must be either action or observation. has: {event}')
+
+    d["event_type"] = type(event).__name__
     return d
 
 
