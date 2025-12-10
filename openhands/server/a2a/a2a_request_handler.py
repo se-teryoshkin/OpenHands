@@ -136,7 +136,9 @@ class A2AOHTaskWrapper:
         if state in TASK_TERMINAL_STATES:
             self.is_finished = True
 
-    def to_response(self, history_length: int | None = None) -> Task:
+    def to_response(self, history_length: int | None = None, show_all_events: bool | None = None) -> Task:
+        if show_all_events is None:
+            show_all_events = False
 
         if self.status.state in (TaskState.failed, TaskState.input_required):
 
@@ -160,10 +162,38 @@ class A2AOHTaskWrapper:
             else:
                 self.status.message = self.history[-1]
 
-        if history_length is not None and history_length > 0:
-            history = self.history[-history_length:]
+        if show_all_events:
+            if history_length is not None:
+                if history_length > 0:
+                    history = self.history[-history_length:]
+                else:
+                    history = list()
+            else:
+                history = self.history
         else:
-            history = self.history
+            history = list()
+
+            if history_length is None or history_length > 0:
+                for message in reversed(self.history):
+
+                    metadata = message.metadata
+                    if metadata is not None:
+                        event = self.events[metadata.get(f"{METADATA_NAME_PREFIX}/event-id")]
+                        if (isinstance(event, Action)
+                                and not isinstance(event, (
+                                        # System events
+                                        NullAction,
+                                        NullObservation,
+                                        AgentStateChangedObservation,
+                                        SystemMessageAction,
+                                        RecallAction,
+                                        RecallObservation,
+                                        ChangeAgentStateAction,
+                                ))):
+                            history.append(message)
+                            if history_length is not None and len(history) >= history_length:
+                                break
+                history = history[::-1]
 
         return Task(
             id=self.task_id,
@@ -192,6 +222,7 @@ class A2AOHTaskWrapper:
             role=Role.user if event.source == EventSource.USER else Role.agent,
             message_id=f"{task_id}-{event.id}",
             context_id=self.context_id,
+            # TODO: Add multiple parts
             parts=[TextPart(text=event.message if event.message is not None else "")],
             task_id=task_id,
             metadata={
@@ -203,19 +234,7 @@ class A2AOHTaskWrapper:
             }
         )
 
-        # TODO: Сохранять все события, но фильтрацию выполнять только при отправке клиенту
-        #  в потоке или при tasks/get + метаданные
-        if not isinstance(event, (
-            # System events
-            NullAction,
-            NullObservation,
-            AgentStateChangedObservation,
-            SystemMessageAction,
-            RecallAction,
-            RecallObservation,
-            ChangeAgentStateAction,
-        )) or self.show_all_events:
-            self.history.append(message)
+        self.history.append(message)
 
         match agent_state:
             case AgentState.FINISHED:
@@ -416,7 +435,14 @@ class A2aRequestHandler:
         raise ServerError(error=UnsupportedOperationError())
 
     async def on_get_task(self, params: TaskQueryParams, context) -> Task | None:
-        return self._get_task_by_id(params.id).to_response(params.history_length)
+        show_all_events = False
+        if (metadata := params.metadata) is not None:
+            show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
+
+        return self._get_task_by_id(params.id).to_response(
+            history_length=params.history_length,
+            show_all_events=show_all_events
+        )
 
     # TODO: Add tasks/list
     async def on_list_task(self):
