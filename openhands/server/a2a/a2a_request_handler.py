@@ -163,33 +163,37 @@ class A2AOHTaskWrapper:
                 self.status.message = self.history[-1]
 
         if show_all_events:
-            if history_length is not None and history_length > 0:
-                history = self.history[-history_length:]
+            if history_length is not None:
+                if history_length > 0:
+                    history = self.history[-history_length:]
+                else:
+                    history = list()
             else:
                 history = self.history
         else:
             history = list()
-            for message in reversed(self.history):
 
-                metadata = message.metadata
-                if metadata is not None:
-                    event_id = metadata.get(f"{METADATA_NAME_PREFIX}/event-id", None)
-                    event = self.events[event_id]
-                    if (event_id in self.events and isinstance(event, Action)
-                            and not isinstance(event, (
-                                # System events
-                                NullAction,
-                                NullObservation,
-                                AgentStateChangedObservation,
-                                SystemMessageAction,
-                                RecallAction,
-                                RecallObservation,
-                                ChangeAgentStateAction,
-                        ))):
-                        history.append(message)
-                        if history_length is not None and len(history) >= history_length:
-                            break
-            history = history[::-1]
+            if history_length is None or history_length > 0:
+                for message in reversed(self.history):
+
+                    metadata = message.metadata
+                    if metadata is not None:
+                        event = self.events[metadata.get(f"{METADATA_NAME_PREFIX}/event-id")]
+                        if (isinstance(event, Action)
+                                and not isinstance(event, (
+                                        # System events
+                                        NullAction,
+                                        NullObservation,
+                                        AgentStateChangedObservation,
+                                        SystemMessageAction,
+                                        RecallAction,
+                                        RecallObservation,
+                                        ChangeAgentStateAction,
+                                ))):
+                            history.append(message)
+                            if history_length is not None and len(history) >= history_length:
+                                break
+                history = history[::-1]
 
         return Task(
             id=self.task_id,
@@ -218,6 +222,7 @@ class A2AOHTaskWrapper:
             role=Role.user if event.source == EventSource.USER else Role.agent,
             message_id=f"{task_id}-{event.id}",
             context_id=self.context_id,
+            # TODO: Add multiple parts
             parts=[TextPart(text=event.message if event.message is not None else "")],
             task_id=task_id,
             metadata={
@@ -430,8 +435,14 @@ class A2aRequestHandler:
         raise ServerError(error=UnsupportedOperationError())
 
     async def on_get_task(self, params: TaskQueryParams, context) -> Task | None:
-        show_all_events = params.metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
-        return self._get_task_by_id(params.id).to_response(history_length=params.history_length, show_all_events=show_all_events)
+        show_all_events = False
+        if (metadata := params.metadata) is not None:
+            show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
+
+        return self._get_task_by_id(params.id).to_response(
+            history_length=params.history_length,
+            show_all_events=show_all_events
+        )
 
     # TODO: Add tasks/list
     async def on_list_task(self):
