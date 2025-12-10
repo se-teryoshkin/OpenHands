@@ -78,6 +78,9 @@ class A2AOHTaskWrapper:
             state=TaskState.submitted,
         )
         self.history: list[A2AMessage] = list()
+        # TODO: Необходимо придумать способ хранить zip-архивы тасок
+        #  на диске, чтобы в рамках одного контекста можно было отдавать разные
+        #  снапшоты рабочей директории, а также сохранялось состояние при перезапуске OH.
         self.artifacts: list[Artifact] = list()
         self.min_event_id = -1
         self.max_event_id = -1
@@ -96,9 +99,6 @@ class A2AOHTaskWrapper:
         self.metadata = metadata
 
         session.add_task(self)
-
-        # TODO: Add artifacts (zip-file with code).
-        #  Reference: openhands.server.routes.files.py::zip_current_workspace::185
 
     def __repr__(self) -> str:
         return (f"Task(id={self.task_id}, status={self.status}, "
@@ -260,15 +260,20 @@ class A2AOHTaskWrapper:
                 pass
 
         if self.is_finished:
-            file = self.zip_current_workspace()
-            if file is not None:
-                self.artifacts.append(Artifact(
-                    artifactId=uuid4().hex,
-                    parts=[FilePart(file=file)]
-                ))
-            # TODO: # Add finish processing (for example, close stream, create artifacts, etc)
-            ...
 
+            # Finish processing, like close stream, create artifacts, etc.
+
+            # Temporary disabled
+            ENABLE_ARTIFACTS = False
+            if self.status.state == TaskState.completed and ENABLE_ARTIFACTS:
+                file = self.zip_current_workspace()
+                if file is not None:
+                    self.artifacts.append(Artifact(
+                        artifact_id=uuid4().hex,
+                        parts=[FilePart(file=file)]
+                    ))
+
+    # TODO: Reuse openhands.server.routes.files.py::zip_current_workspace::185 ?
     def zip_current_workspace(self) -> FileWithBytes | None:
         try:
             logger.debug('Zipping workspace')
@@ -278,7 +283,7 @@ class A2AOHTaskWrapper:
                 zip_file_path = runtime.copy_from(path)
             except AgentRuntimeUnavailableError as e:
                 logger.error(f'Error zipping workspace: {e}')
-                return
+                return None
 
             zip_b64 = base64.b64encode(zip_file_path.read_bytes())
             file = FileWithBytes(
@@ -291,6 +296,7 @@ class A2AOHTaskWrapper:
 
         except Exception as e:
             logger.error(f'Error zipping workspace: {e}')
+
 
 class A2AOHSessionWrapper:
 
