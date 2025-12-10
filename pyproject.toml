@@ -122,8 +122,14 @@ sqlalchemy = { extras = [ "asyncio" ], version = "^2.0.40" }
 pg8000 = "^1.31.5"
 asyncpg = "^0.30.0"
 
+# LangGraph agent dependencies (optional)
+langchain-core = { version = "^0.3.0", optional = true }
+langchain-openai = { version = "^0.2.0", optional = true }
+langgraph = { version = "^0.2.0", optional = true }
+
 [tool.poetry.extras]
 third_party_runtimes = [ "e2b-code-interpreter", "modal", "runloop-api-client", "daytona" ]
+langgraph_agent = [ "langchain-core", "langchain-openai", "langgraph" ]
 
 [tool.poetry.group.dev]
 optional = true
