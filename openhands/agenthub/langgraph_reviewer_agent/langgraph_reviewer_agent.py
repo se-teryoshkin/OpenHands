@@ -157,10 +157,6 @@ then analyze the code, run tests if requested, and provide your findings.
         Returns:
             Action to execute
         """
-        # Initialize graph if needed
-        if self._graph is None:
-            self._graph = self._build_graph()
-
         # Initialize state if needed
         if self._graph_state is None:
             self._graph_state = self._initialize_state(state)
@@ -171,51 +167,59 @@ then analyze the code, run tests if requested, and provide your findings.
             # Look for the most recent observation in state history
             if state.history:
                 last_event = state.history[-1]
-                # Add the observation to messages
-                observation_text = f"Observation: {getattr(last_event, 'content', str(last_event))}"
-                self._graph_state['messages'].append(
-                    HumanMessage(content=observation_text)
+                # Add the observation to messages as a ToolMessage
+                from langchain_core.messages import ToolMessage
+
+                # Get the content from the observation
+                observation_content = getattr(last_event, 'content', str(last_event))
+
+                # Create a ToolMessage with the observation
+                tool_message = ToolMessage(
+                    content=observation_content,
+                    tool_call_id=self._graph_state['next_action'].get('tool_call_id', 'unknown')
                 )
+                self._graph_state['messages'].append(tool_message)
                 self._graph_state['next_action'] = None
 
         try:
-            # Invoke the agent
-            result = self._graph.invoke(
-                {'messages': self._graph_state['messages']},
-                {'recursion_limit': 10},
-            )
+            # Call LLM directly with tools (bypass LangGraph ReAct agent)
+            from langchain_core.messages import AIMessage
 
-            # Extract the response
-            response_messages = result.get('messages', [])
+            # Bind tools to the LLM
+            llm_with_tools = self.langchain_llm.bind_tools(self.reviewer_tools)
 
-            if not response_messages:
-                return MessageAction(
-                    content='No response from reviewer agent', wait_for_response=False
-                )
+            # Invoke the LLM
+            response = llm_with_tools.invoke(self._graph_state['messages'])
 
-            # Get the last message
-            last_message = response_messages[-1]
-
-            # Update state messages
-            self._graph_state['messages'] = response_messages
+            # Add the response to messages
+            self._graph_state['messages'].append(response)
 
             # Check if this is a tool call
-            if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
-                tool_call = last_message.tool_calls[0]
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                tool_call = response.tool_calls[0]
                 tool_name = tool_call.get('name', '')
                 tool_args = tool_call.get('args', {})
+                tool_call_id = tool_call.get('id', 'unknown')
 
                 logger.info(f'Tool call: {tool_name} with args: {tool_args}')
 
                 # Handle different tool calls
                 if tool_name == 'run_command':
                     command = tool_args.get('command', '')
-                    self._graph_state['next_action'] = {'type': 'command', 'command': command}
+                    self._graph_state['next_action'] = {
+                        'type': 'command',
+                        'command': command,
+                        'tool_call_id': tool_call_id
+                    }
                     return CmdRunAction(command=command)
 
                 elif tool_name == 'read_file':
                     path = tool_args.get('path', '')
-                    self._graph_state['next_action'] = {'type': 'read_file', 'path': path}
+                    self._graph_state['next_action'] = {
+                        'type': 'read_file',
+                        'path': path,
+                        'tool_call_id': tool_call_id
+                    }
                     return FileReadAction(path=path)
 
                 elif tool_name == 'finish_review':
@@ -250,7 +254,7 @@ then analyze the code, run tests if requested, and provide your findings.
                     )
 
             # If no tool call, return the message content
-            content = getattr(last_message, 'content', '')
+            content = getattr(response, 'content', '')
             if content:
                 return MessageAction(content=content, wait_for_response=False)
 
