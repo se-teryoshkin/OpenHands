@@ -1,0 +1,6 @@
+{% if microagents %}
+Available microagents:
+{% for microagent in microagents %}
+- {{ microagent }}
+{% endfor %}
+{% endif %}

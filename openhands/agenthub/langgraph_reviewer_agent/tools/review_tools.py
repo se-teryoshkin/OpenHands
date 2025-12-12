@@ -6,7 +6,6 @@ from openhands.core.logger import openhands_logger as logger
 
 try:
     from langchain_core.tools import StructuredTool
-
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False

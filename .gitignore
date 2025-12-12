@@ -260,3 +260,6 @@ test-results
 .sessions
 .eval_sessions
 .misc
+
+# temporary data
+tmp_data/
