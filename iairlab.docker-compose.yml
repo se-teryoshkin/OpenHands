@@ -9,7 +9,7 @@ services:
     environment:
 
       # Настройки для корректной работы A2A well-known uri.
-      BACKEND_HOST: "192.168.145.147"
+      BACKEND_HOST: "10.32.15.14"
       BACKEND_PORT: "3000"
 
       # Настройки sandbox: используемый образ, дополнительные ENV и volumes
@@ -20,20 +20,31 @@ services:
 
       # Для запуска с полноценной работой компонентов. Требуется развёрнутая инфраструктура.
       SANDBOX_RUNTIME_STARTUP_ENV_VARS: "\
-      {'APPFACTORY_MOCK': '0', \
+      {'APPFACTORY_MOCK': '1', \
+       'APPFACTORY_DLT_MOCK': '1', \
+       'APPFACTORY_RAG_MOCK': '1', \
        'APPFACTORY_DLTOOL_SCORING_OPENAI_BASE_URL': 'http://d.dgx:58891/v1', \
-       'APPFACTORY_DLTOOL_SCORING_OPENAI_API_KEY': 'REMOVED', \
+       'APPFACTORY_DLTOOL_SCORING_OPENAI_API_KEY': 'token-abc123', \
        'APPFACTORY_DLTOOL_SCORING_WEB_DOC_AGENT_LLM_MODEL': '/models/e5-mistral-7b-instruct', \
        'APPFACTORY_RAG_GENERATOR_BASE_URL': 'http://d.dgx:34000/v1', \
-       'APPFACTORY_RAG_GENERATOR_API_KEY': 'REMOVED', \
+       'APPFACTORY_RAG_GENERATOR_API_KEY': 'sk-teacher-key-123-litellm', \
        'APPFACTORY_RAG_GENERATOR_MODEL_NAME': 'gpt-oss-120b', \
        'APPFACTORY_RAG_TOKENIZER_PATH': '/tokenizer', \
        'APPFACTORY_RAG_EMBEDDER_BASE_URL': 'http://d.dgx:58892/v1', \
-       'APPFACTORY_RAG_EMBEDDER_API_KEY': 'REMOVED', \
+       'APPFACTORY_RAG_EMBEDDER_API_KEY': 'token-abc123', \
        'APPFACTORY_RAG_EMBEDDER_MODEL_NAME': '/models/e5-mistral-7b-instruct', \
-       'APPFACTORY_RAG_ELASTICSEARCH_URL': 'http://node13.bdcl:9200', \
+       'APPFACTORY_RAG_ELASTICSEARCH_URL': 'http://10.32.15.14:9200', \
        'APPFACTORY_RAG_ELASTICSEARCH_USER': 'elastic', \
-       'APPFACTORY_RAG_ELASTICSEARCH_PASSWORD': 'REMOVED'}"
+       'APPFACTORY_RAG_ELASTICSEARCH_PASSWORD': '123', \
+       'APPFACTORY_LLM_API_KEY': 'sk-teacher-key-123-litellm', \
+       'APPFACTORY_LLM_MODEL_NAME': 'gpt-oss-120b', \
+       'APPFACTORY_LLM_BASE_URL': 'http://d.dgx:34000/v1', \
+       'APPFACTORY_SEARCHTOOL_GENERATOR_BASE_URL': 'http://d.dgx:34000/v1', \
+       'APPFACTORY_SEARCHTOOL_GENERATOR_API_KEY': 'sk-teacher-key-123-litellm', \
+       'APPFACTORY_SEARCHTOOL_GENERATOR_MODEL_NAME': 'gpt-oss-120b', \
+       'APPFACTORY_HH_URL': 'http://d.dgx:26676', \
+       'APPFACTORY_SEARCHTOOL_REDIS_URL': 'redis://d.dgx:6479/1', \
+       'REDIS_URL': 'redis://d.dgx:6479/1'}"
 
       # Образ sandbox должен содержать следующие директории:
       #  1. /appfactory_components (из AppFactory-components)
@@ -41,7 +52,7 @@ services:
       #  3. /instructions (из AppFactory-a2a)
       #  4. /tokenizer
       # Иначе их необходимо вмонтировать с помощью volumes.
-      SANDBOX_VOLUMES: "/path/to/dir/with/specs:/specs:ro"
+      SANDBOX_VOLUMES: "/data/hdd/wspace/OpenHands/lrc_specs:/specs:ro,/data/hdd/wspace/OpenHands/qwen2-72B-tokenizer:/tokenizer:ro,/data/hdd/wspace/OpenHands/runtime-workspaces:/.all-workspaces:ro"
 
       # Путь, в котором будут создаваться директории под volume отдельных рантаймов.
       # Каждая директория будет монтироваться только в свой рантайм. Таким образом получаем изолированные
@@ -53,7 +64,7 @@ services:
       #      ├── main.py
       #      ├── code.py
       #      └── ...
-      SANDBOX_ALL_WORKSPACES_DIR: "/path/to/dir/for/multiple/workspaces"
+      SANDBOX_ALL_WORKSPACES_DIR: "/data/hdd/wspace/OpenHands/runtime-workspaces"
 
       LOG_ALL_EVENTS: "true"
       DEBUG: "true"
