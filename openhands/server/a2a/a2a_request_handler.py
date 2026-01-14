@@ -32,11 +32,9 @@ from openhands.events import EventStreamSubscriber
 from openhands.events.action import NullAction, SystemMessageAction, RecallAction, Action, ChangeAgentStateAction, \
     MessageAction
 from openhands.events.event import Event, EventSource
-from openhands.events.event_store import EventStore
 
 from openhands.events.observation import NullObservation
 from openhands.events.observation.agent import AgentStateChangedObservation, RecallObservation
-from openhands.events.serialization import event_to_dict
 from openhands.integrations.provider import ProviderHandler
 from openhands.server.services.conversation_service import create_new_conversation
 from openhands.server.session.agent_session import AgentSession
@@ -61,6 +59,7 @@ AUTO_CONTINUE_RESPONSE = (
 )
 
 A2A_UPDATED_AT_CALLBACK_ID = 'a2a_updated_at_callback_id'
+TIMEOUT_FOR_CONVERSATION_TIME = 30.0
 
 class A2AOHTaskWrapper:
 
@@ -179,10 +178,6 @@ class A2AOHTaskWrapper:
         )
 
     def on_event(self, event: Event) -> None:
-
-        print("ON EVENT")
-        print(event_to_dict(event))
-
         task_id = self.task_id
         self.events[event.id] = event
 
@@ -258,7 +253,8 @@ class A2AOHTaskWrapper:
 
         if self.is_finished:
             # TODO: # Add finish processing (for example, close stream, create artifacts, etc)
-            print(f"Task finished {self.task_id}")
+           ...
+
 
     def agent_session_is_started(self):
         agent_session = conversation_manager.get_agent_session(self.context_id)
@@ -285,16 +281,23 @@ class A2aRequestHandler:
 
         return task
 
-    def _check_task(self, task: A2AOHTaskWrapper, context_id: str) -> bool:
-        current_task = self._current_session_tasks[context_id]
-        if current_task is not None and current_task.status.state not in TASK_TERMINAL_STATES:
-            task.update_status(TaskState.rejected, text="You cannot run multiple tasks simultaneously in the context")
-            return False
+    def _check_task(self, task: A2AOHTaskWrapper, context_id: str) -> (bool, A2AOHTaskWrapper):
+        cur_task = None
+        last_task = None
+        if context_id in self._current_session_tasks.keys():
+            cur_task = self._current_session_tasks[context_id]
+        if cur_task is not None:
+            if cur_task.status.state not in TASK_TERMINAL_STATES:
+                task.update_status(TaskState.rejected,
+                                   text="You cannot run multiple tasks simultaneously in the context")
+                return False, None
+            else:
+                last_task = cur_task
 
         self._current_session_tasks[context_id] = task
 
         # TODO: Add check if agent name stay the same in metadata, otherwise throw an exception.
-        return True
+        return True, last_task
 
     async def on_cancel_task(self, params: TaskIdParams, context) -> Task | None:
         # TODO: Check if it will work in case of task is canceled while runtime is starting.
@@ -330,13 +333,11 @@ class A2aRequestHandler:
                 # FIXME: Не уверен, что допустимо генерить context_id на стороне клиента
                 initial_user_msg = params.message.parts[0].root.text
 
-                #TODO:add to background?
-                await self._new_conversation(params=params,
+                asyncio.create_task(self._new_conversation(params=params,
                                              context_id=context_id,
                                              user_id=None,
-                                             initial_user_msg=initial_user_msg)
+                                             initial_user_msg=initial_user_msg))
 
-                print("created new conversation")
                 task.first = True
                 self._sessions.append(context_id)
 
@@ -369,9 +370,11 @@ class A2aRequestHandler:
         if task.status.state == TaskState.input_required:
             task.update_status(TaskState.working)
 
-        if self._check_task(task=task, context_id=context_id):
+        check, last_task = self._check_task(task=task, context_id=context_id)
+
+        if check:
             asyncio.create_task(
-                self._background_task(params, task)
+                self._background_task(params, task, last_task)
             )
 
         return task.to_response(
@@ -448,13 +451,14 @@ class A2aRequestHandler:
     async def _conversation_init_data_set(
         self,
         params: MessageSendParams | TaskQueryParams | TaskIdParams,
+        user_id: str | None = None,
     ):
         # TODO: Fix user_id?
-        settings_store = await SettingsStoreImpl.get_instance(config, user_id=None)
+        settings_store = await SettingsStoreImpl.get_instance(config, user_id=user_id)
         settings = await settings_store.load()
 
         # TODO: Fix user_id?
-        secrets_store = await SecretsStoreImpl.get_instance(config, user_id=None)
+        secrets_store = await SecretsStoreImpl.get_instance(config, user_id=user_id)
         user_secrets: Secrets | None = await secrets_store.load()
 
         if not settings:
@@ -488,10 +492,10 @@ class A2aRequestHandler:
                                 context_id: str,
                                 user_id: str | None = None,
                                 auth_type: AuthType | None = None,
-                                initial_user_msg:str | None = None,
+                                initial_user_msg: str | None = None,
                                 ):
 
-        data = await self._conversation_init_data_set(params=params)
+        data = await self._conversation_init_data_set(params=params, user_id=user_id)
 
         logger.info(f'Initializing_new_conversation:{data}')
         repository = data.selected_repository
@@ -533,14 +537,13 @@ class A2aRequestHandler:
     async def _background_task(
             self,
             params: MessageSendParams | TaskQueryParams | TaskIdParams,
-            task: A2AOHTaskWrapper
+            task: A2AOHTaskWrapper,
+            last_task: A2AOHTaskWrapper | None = None
     ) -> None:
-        print("Before ensure event sub")
-        await self._event_subscription(task)
+        await self._event_subscription(task, last_task)
         if task.status.state == TaskState.input_required:
             task.update_status(TaskState.working)
         if not task.first:
-            print("Dispatched event")
             await self.dispatch(params, task)
         else:
             task.first = False
@@ -564,8 +567,9 @@ class A2aRequestHandler:
         except Exception as e:
             logger.error(f'Error adding message to conversation: {e}')
 
-    async def _event_subscription(self, task: A2AOHTaskWrapper) -> None:
-        deadline = asyncio.get_event_loop().time() + 10.0
+    async def _event_subscription(self, task: A2AOHTaskWrapper, last_task: A2AOHTaskWrapper | None) -> None:
+
+        deadline = asyncio.get_event_loop().time() + TIMEOUT_FOR_CONVERSATION_TIME
         while asyncio.get_event_loop().time() < deadline:
             agent_session = conversation_manager.get_agent_session(task.context_id)
             if agent_session is not None:
@@ -577,6 +581,10 @@ class A2aRequestHandler:
             logger.error(f"No agent_session for {task.context_id} after waiting")
             return
 
+        if last_task is not None:
+            agent_session.event_stream.unsubscribe(EventStreamSubscriber.SERVER,
+                A2A_UPDATED_AT_CALLBACK_ID + "_" + str(last_task.task_id))
+
         if not task.subscribed:
             agent_session.event_stream.subscribe(
                 EventStreamSubscriber.SERVER,
@@ -585,8 +593,3 @@ class A2aRequestHandler:
             )
 
             task.subscribed = True
-
-            event_store = EventStore(task.context_id, conversation_manager.file_store, user_id=None)
-            for ev in event_store.search_events():
-                if ev.id > task.max_event_id:
-                    task.on_event(ev)
