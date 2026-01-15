@@ -336,7 +336,6 @@ class A2aRequestHandler:
 
     _tasks: dict[str, A2AOHTaskWrapper] = dict()
     _current_session_tasks: dict[str, A2AOHTaskWrapper] = dict()
-    _sessions: list[str] = list()
     # TODO: Бесшовно интегрировать с имеющимися сессиями.
     #  Нужно подтягивать в том числе и обычные сессии, а не только A2A.
 
@@ -392,7 +391,7 @@ class A2aRequestHandler:
         task = A2AOHTaskWrapper(task_id=task_id, metadata=copy(params.metadata), context_id=context_id)
 
         if task_id not in self._tasks:
-            if context_id is None or context_id not in self._sessions:
+            if context_id is None or conversation_manager.get_agent_session(task.context_id) is None:
                 if context_id is None:
                     context_id = uuid4().hex
 
@@ -406,8 +405,6 @@ class A2aRequestHandler:
                                              initial_user_msg=initial_user_msg))
 
                 task.first = True
-                self._sessions.append(context_id)
-
             self._tasks[task.task_id] = task
         else:
             task = self._tasks[task_id]
