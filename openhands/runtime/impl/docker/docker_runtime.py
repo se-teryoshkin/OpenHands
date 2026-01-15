@@ -319,6 +319,18 @@ class DockerRuntime(ActionExecutionClient):
                 f'Mount dir (legacy): {self.config.workspace_mount_path} with mode: {mount_mode}'
             )
 
+        # If there is no sandbox workspace mount and set `all_workspaces_dir`, then add dynamic workspace volume
+        if self.config.workspace_base is None and (all_ws_dir := self.config.sandbox.all_workspaces_dir) is not None:
+            session_workspace_dir = os.path.join(os.path.abspath(all_ws_dir), self.sid)
+            sandbox_workspace_dir = self.config.workspace_mount_path_in_sandbox or "/workspace"
+            volumes[session_workspace_dir] = {
+                "bind": sandbox_workspace_dir,
+                "mode": "rw",
+            }
+            logger.debug(
+                f'Workspace Mount dir (sandbox.volumes): {session_workspace_dir} to {sandbox_workspace_dir} with mode: rw'
+            )
+
         return volumes
 
     def _process_overlay_mounts(self) -> list[Mount]:

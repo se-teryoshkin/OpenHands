@@ -1,4 +1,6 @@
 import asyncio
+import os
+import base64
 from collections.abc import AsyncGenerator
 from copy import copy
 from datetime import datetime, timezone, UTC
@@ -7,6 +9,7 @@ from uuid import uuid4
 
 from a2a.server.events import Event as A2AEvent
 from a2a.types import (
+    Artifact,
     Message as A2AMessage,
     MessageSendParams,
     Role,
@@ -20,11 +23,13 @@ from a2a.types import (
     UnsupportedOperationError,
     InvalidParamsError,
     TextPart,
+    FilePart, FileWithBytes
 )
 
 from a2a.utils.errors import ServerError
 from a2a.utils.telemetry import SpanKind, trace_class
 
+from openhands.core.exceptions import AgentRuntimeUnavailableError
 from openhands.core.logger import openhands_logger as logger
 from openhands.core.schema import ActionType
 from openhands.core.schema.agent import AgentState
@@ -35,6 +40,7 @@ from openhands.events.event import Event, EventSource
 
 from openhands.events.observation import NullObservation
 from openhands.events.observation.agent import AgentStateChangedObservation, RecallObservation
+from openhands.runtime import Runtime
 from openhands.integrations.provider import ProviderHandler
 from openhands.server.services.conversation_service import create_new_conversation
 from openhands.server.session.agent_session import AgentSession
@@ -43,7 +49,8 @@ from openhands.server.shared import (
     SecretsStoreImpl,
     SettingsStoreImpl,
     config,
-    server_config, conversation_manager
+    server_config,
+    conversation_manager
 )
 from openhands.server.types import AppMode
 from openhands.server.user_auth import AuthType
@@ -79,6 +86,10 @@ class A2AOHTaskWrapper:
             state=TaskState.submitted,
         )
         self.history: list[A2AMessage] = list()
+        # TODO: Необходимо придумать способ хранить zip-архивы тасок
+        #  на диске, чтобы в рамках одного контекста можно было отдавать разные
+        #  снапшоты рабочей директории, а также сохранялось состояние при перезапуске OH.
+        self.artifacts: list[Artifact] = list()
         self.min_event_id = -1
         self.max_event_id = -1
         self.events: dict[int, Event] = dict()
@@ -95,10 +106,6 @@ class A2AOHTaskWrapper:
         self.show_all_events = show_all_events
         self.metadata = metadata
         self.context_id = context_id
-
-        # TODO: Add artifacts (zip-file with code).
-        #  Reference: openhands.server.routes.files.py::zip_current_workspace::185
-
 
     def __repr__(self) -> str:
         return (f"Task(id={self.task_id}, status={self.status}, "
@@ -140,7 +147,9 @@ class A2AOHTaskWrapper:
         if state in TASK_TERMINAL_STATES:
             self.is_finished = True
 
-    def to_response(self, history_length: int | None = None) -> Task:
+    def to_response(self, history_length: int | None = None, show_all_events: bool | None = None) -> Task:
+        if show_all_events is None:
+            show_all_events = False
 
         if self.status.state in (TaskState.failed, TaskState.input_required):
 
@@ -164,10 +173,42 @@ class A2AOHTaskWrapper:
             else:
                 self.status.message = self.history[-1]
 
-        if history_length is not None and history_length > 0:
-            history = self.history[-history_length:]
+        if show_all_events:
+            if history_length is not None:
+                if history_length > 0:
+                    history = self.history[-history_length:]
+                else:
+                    history = list()
+            else:
+                history = self.history
         else:
-            history = self.history
+            history = list()
+
+            if history_length is None or history_length > 0:
+                for message in reversed(self.history):
+
+                    metadata = message.metadata
+                    if metadata is not None:
+                        event = self.events[metadata.get(f"{METADATA_NAME_PREFIX}/event-id")]
+                        if (isinstance(event, Action)
+                                and not isinstance(event, (
+                                        # System events
+                                        NullAction,
+                                        NullObservation,
+                                        AgentStateChangedObservation,
+                                        SystemMessageAction,
+                                        RecallAction,
+                                        RecallObservation,
+                                        ChangeAgentStateAction,
+                                ))):
+                            history.append(message)
+                            if history_length is not None and len(history) >= history_length:
+                                break
+                history = history[::-1]
+
+        artifacts = None
+        if self.status.state is TaskState.completed and len(self.artifacts) > 0:
+            artifacts = self.artifacts
 
         return Task(
             id=self.task_id,
@@ -175,9 +216,11 @@ class A2AOHTaskWrapper:
             status=self.status,
             history=history,
             metadata=copy(self.metadata),
+            artifacts=artifacts
         )
 
     def on_event(self, event: Event) -> None:
+
         task_id = self.task_id
         self.events[event.id] = event
 
@@ -195,6 +238,7 @@ class A2AOHTaskWrapper:
             role=Role.user if event.source == EventSource.USER else Role.agent,
             message_id=f"{task_id}-{event.id}",
             context_id=self.context_id,
+            # TODO: Add multiple parts
             parts=[TextPart(text=event.message if event.message is not None else "")],
             task_id=task_id,
             metadata={
@@ -206,19 +250,7 @@ class A2AOHTaskWrapper:
             }
         )
 
-        # TODO: Сохранять все события, но фильтрацию выполнять только при отправке клиенту
-        #  в потоке или при tasks/get + метаданные
-        if not isinstance(event, (
-            # System events
-            NullAction,
-            NullObservation,
-            AgentStateChangedObservation,
-            SystemMessageAction,
-            RecallAction,
-            RecallObservation,
-            ChangeAgentStateAction,
-        )) or self.show_all_events:
-            self.history.append(message)
+        self.history.append(message)
 
         match agent_state:
             case AgentState.FINISHED:
@@ -252,8 +284,43 @@ class A2AOHTaskWrapper:
                 pass
 
         if self.is_finished:
-            # TODO: # Add finish processing (for example, close stream, create artifacts, etc)
-           ...
+
+            # Finish processing, like close stream, create artifacts, etc.
+
+            # Temporary disabled
+            ENABLE_ARTIFACTS = False
+            if self.status.state == TaskState.completed and ENABLE_ARTIFACTS:
+                file = self.zip_current_workspace()
+                if file is not None:
+                    self.artifacts.append(Artifact(
+                        artifact_id=uuid4().hex,
+                        parts=[FilePart(file=file)]
+                    ))
+
+    # TODO: Reuse openhands.server.routes.files.py::zip_current_workspace::185 ?
+    def zip_current_workspace(self) -> FileWithBytes | None:
+        try:
+            logger.debug('Zipping workspace')
+            agent_session = conversation_manager.get_agent_session(self.context_id)
+            runtime: Runtime = agent_session.runtime
+            path = runtime.config.workspace_mount_path_in_sandbox
+            try:
+                zip_file_path = runtime.copy_from(path)
+            except AgentRuntimeUnavailableError as e:
+                logger.error(f'Error zipping workspace: {e}')
+                return None
+
+            zip_b64 = base64.b64encode(zip_file_path.read_bytes())
+            file = FileWithBytes(
+                name='workspace.zip',
+                mime_type='application/zip',
+                bytes=zip_b64
+            )
+            os.unlink(zip_file_path)
+            return file
+
+        except Exception as e:
+            logger.error(f'Error zipping workspace: {e}')
 
 
     def agent_session_is_started(self):
@@ -412,7 +479,14 @@ class A2aRequestHandler:
         raise ServerError(error=UnsupportedOperationError())
 
     async def on_get_task(self, params: TaskQueryParams, context) -> Task | None:
-        return self._get_task_by_id(params.id).to_response(params.history_length)
+        show_all_events = False
+        if (metadata := params.metadata) is not None:
+            show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
+
+        return self._get_task_by_id(params.id).to_response(
+            history_length=params.history_length,
+            show_all_events=show_all_events
+        )
 
     # TODO: Add tasks/list
     async def on_list_task(self):

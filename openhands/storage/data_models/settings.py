@@ -44,6 +44,7 @@ class Settings(BaseModel):
     max_budget_per_task: float | None = None
     # Maximum number of events in the conversation view before condensation runs
     condenser_max_size: int | None = None
+    condenser_keep_first: int | None = None
     email: str | None = None
     email_verified: bool | None = None
     git_user_name: str | None = None
@@ -151,6 +152,15 @@ class Settings(BaseModel):
             mcp_config=mcp_config,
             search_api_key=app_config.search_api_key,
             max_budget_per_task=app_config.max_budget_per_task,
+            condenser_max_size=app_config.condenser_max_size,
+            condenser_keep_first=app_config.condenser_keep_first,
+            enable_default_condenser=app_config.enable_default_condenser,
+            sandbox_base_container_image=app_config.sandbox.base_container_image,
+            sandbox_runtime_container_image=app_config.sandbox.runtime_container_image,
+            sandbox_api_key=app_config.sandbox.api_key,
+            git_user_name=app_config.git_user_name,
+            git_user_email=app_config.git_user_email,
+            user_consents_to_analytics=app_config.user_consents_to_analytics,
         )
         return settings
 

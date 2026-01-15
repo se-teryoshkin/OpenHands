@@ -227,14 +227,17 @@ class WebSession:
             # The order matters: with the browser output first, the summarizer
             # will only see the most recent browser output, which should keep
             # the summarization cost down.
+
+            # TODO: Move to default values?
             max_events_for_condenser = settings.condenser_max_size or 120
+            keep_first_for_condenser = settings.condenser_keep_first or 4
             default_condenser_config = CondenserPipelineConfig(
                 condensers=[
                     ConversationWindowCondenserConfig(),
                     BrowserOutputCondenserConfig(attention_window=2),
                     LLMSummarizingCondenserConfig(
                         llm_config=llm_config,
-                        keep_first=4,
+                        keep_first=keep_first_for_condenser,
                         max_size=max_events_for_condenser,
                     ),
                 ]
@@ -245,7 +248,7 @@ class WebSession:
                 f' browser_output_masking(attention_window=2), '
                 f' llm(model="{llm_config.model}", '
                 f' base_url="{llm_config.base_url}", '
-                f' keep_first=4, max_size={max_events_for_condenser})'
+                f' keep_first={keep_first_for_condenser}, max_size={max_events_for_condenser})'
             )
             agent_config.condenser = default_condenser_config
         agent = Agent.get_cls(agent_cls)(agent_config, self.llm_registry)

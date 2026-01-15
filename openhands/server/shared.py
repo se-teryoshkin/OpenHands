@@ -1,4 +1,5 @@
 import os
+import json
 
 import socketio
 from dotenv import load_dotenv
@@ -17,10 +18,14 @@ from openhands.storage.files import FileStore
 from openhands.storage.secrets.secrets_store import SecretsStore
 from openhands.storage.settings.settings_store import SettingsStore
 from openhands.utils.import_utils import get_impl
+from openhands.core import logger
+
 
 load_dotenv()
 
 config: OpenHandsConfig = load_openhands_config()
+logger.openhands_logger.debug(f'Config: {json.dumps(config.model_dump(mode="json"), indent=2)}')
+
 server_config_interface: ServerConfigInterface = load_server_config()
 assert isinstance(server_config_interface, ServerConfig), (
     'Loaded server config interface is not a ServerConfig, despite this being assumed'

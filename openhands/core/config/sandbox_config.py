@@ -93,6 +93,14 @@ class SandboxConfig(BaseModel):
         description="Volume mounts in the format 'host_path:container_path[:mode]', e.g. '/my/host/dir:/workspace:rw'. Multiple mounts can be specified using commas, e.g. '/path1:/workspace/path1,/path2:/workspace/path2:ro'",
     )
 
+    # TODO: Зарефакторить, удалив/унифицировав с workspace_base, обеспечив обратную совместимость с workspace_mount_path
+    #  и другими рантаймами.
+    # TODO: Удалять директорию при удалении conversation
+    all_workspaces_dir: str | None = Field(default=None)
+    """Host path for all runtime workspaces.
+    Suitable for running multiple runtimes with its own workspaces directories.
+    workspace_base prioritized over the all_workspaces_dir"""
+
     cuda_visible_devices: str | None = Field(default=None)
     model_config = ConfigDict(extra='forbid')
 

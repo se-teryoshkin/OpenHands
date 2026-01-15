@@ -109,6 +109,13 @@ class OpenHandsConfig(BaseModel):
     cli_multiline_input: bool = Field(default=False)
     conversation_max_age_seconds: int = Field(default=864000)  # 10 days in seconds
     enable_default_condenser: bool = Field(default=True)
+
+    # TODO: Temporary
+    condenser_max_size: int | None = Field(default=None)
+    condenser_keep_first: int | None = Field(default=None)
+
+    user_consents_to_analytics: bool = Field(default=False)
+
     max_concurrent_conversations: int = Field(
         default=3
     )  # Maximum number of concurrent agent loops allowed per user
