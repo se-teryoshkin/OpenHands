@@ -40,6 +40,7 @@ from openhands.events.event import Event, EventSource
 
 from openhands.events.observation import NullObservation
 from openhands.events.observation.agent import AgentStateChangedObservation, RecallObservation
+from openhands.events.serialization import event_to_dict
 from openhands.runtime import Runtime
 from openhands.integrations.provider import ProviderHandler
 from openhands.server.services.conversation_service import create_new_conversation
@@ -66,7 +67,7 @@ AUTO_CONTINUE_RESPONSE = (
 )
 
 A2A_UPDATED_AT_CALLBACK_ID = 'a2a_updated_at_callback_id'
-TIMEOUT_FOR_CONVERSATION_TIME = 30.0
+TIMEOUT_FOR_CONVERSATION_TIME = 120.0
 
 class A2AOHTaskWrapper:
 
@@ -402,13 +403,11 @@ class A2aRequestHandler:
                 asyncio.create_task(self._new_conversation(params=params,
                                              context_id=context_id,
                                              user_id=None,
-                                             initial_user_msg=initial_user_msg))
+                                             initial_user_msg=None))
 
-                task.first = True
             self._tasks[task.task_id] = task
         else:
             task = self._tasks[task_id]
-            task.first = False
             if task.status.state in TASK_TERMINAL_STATES:
                 raise ServerError(error=InvalidParamsError(
                     message="The task already is in terminal state, you cannot interact it"
@@ -611,15 +610,28 @@ class A2aRequestHandler:
             task: A2AOHTaskWrapper,
             last_task: A2AOHTaskWrapper | None = None
     ) -> None:
+        if not task.agent_session_is_started():
+            await self.wait_for_agent(task.context_id)
         await self._event_subscription(task, last_task)
         if task.status.state == TaskState.input_required:
             task.update_status(TaskState.working)
-        if not task.first:
-            await self.dispatch(params, task)
-        else:
-            task.first = False
+        await self.dispatch(params, task)
         logger.debug(f"Finished background task for message {params}")
 
+    async def wait_for_agent(self, context_id: str):
+        deadline = asyncio.get_event_loop().time() + TIMEOUT_FOR_CONVERSATION_TIME
+        while asyncio.get_event_loop().time() < deadline:
+            agent_session = conversation_manager.get_agent_session(context_id)
+            if agent_session is not None:
+                break
+            await asyncio.sleep(0.05)
+
+        deadline = asyncio.get_event_loop().time() + TIMEOUT_FOR_CONVERSATION_TIME
+        while asyncio.get_event_loop().time() < deadline:
+            state = conversation_manager.get_agent_session(context_id).get_state()
+            if state == AgentState.AWAITING_USER_INPUT or state == AgentState.FINISHED:
+                break
+            await asyncio.sleep(0.05)
 
     async def dispatch(self,
                        params: MessageSendParams | TaskQueryParams | TaskIdParams,
@@ -628,9 +640,13 @@ class A2aRequestHandler:
             agent_session: AgentSession = conversation_manager.get_agent_session(task.context_id)
 
             if isinstance(params, MessageSendParams):
+
                 text = params.message.parts[0].root.text
                 action = MessageAction(content=text, image_urls=[])
-                agent_session.event_stream.add_event(action, EventSource.USER)
+                message_data = event_to_dict(action)
+                await conversation_manager.send_event_to_conversation(
+                    task.context_id, message_data
+                )
 
             elif isinstance(params, (TaskQueryParams, TaskIdParams)):
                 action = ChangeAgentStateAction(agent_state=AgentState.STOPPED)
@@ -639,13 +655,6 @@ class A2aRequestHandler:
             logger.error(f'Error adding message to conversation: {e}')
 
     async def _event_subscription(self, task: A2AOHTaskWrapper, last_task: A2AOHTaskWrapper | None) -> None:
-
-        deadline = asyncio.get_event_loop().time() + TIMEOUT_FOR_CONVERSATION_TIME
-        while asyncio.get_event_loop().time() < deadline:
-            agent_session = conversation_manager.get_agent_session(task.context_id)
-            if agent_session is not None:
-                break
-            await asyncio.sleep(0.05)
 
         agent_session = conversation_manager.get_agent_session(task.context_id)
         if agent_session is None:
