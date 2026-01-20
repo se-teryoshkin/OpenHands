@@ -37,6 +37,7 @@ async def initialize_conversation(
     selected_repository: str | None,
     selected_branch: str | None,
     conversation_trigger: ConversationTrigger = ConversationTrigger.GUI,
+    conversation_title: str | None = None,
     git_provider: ProviderType | None = None,
 ) -> ConversationMetadata:
     if conversation_id is None:
@@ -50,7 +51,8 @@ async def initialize_conversation(
             extra={'user_id': user_id, 'session_id': conversation_id},
         )
 
-        conversation_title = get_default_conversation_title(conversation_id)
+        if conversation_title is None:
+            conversation_title = get_default_conversation_title(conversation_id)
 
         logger.info(f'Saving metadata for conversation {conversation_id}')
         conversation_metadata = ConversationMetadata(
@@ -172,6 +174,7 @@ async def create_new_conversation(
     replay_json: str | None,
     conversation_instructions: str | None = None,
     conversation_trigger: ConversationTrigger = ConversationTrigger.GUI,
+    conversation_title: str | None = None,
     git_provider: ProviderType | None = None,
     conversation_id: str | None = None,
     mcp_config: MCPConfig | None = None,
@@ -182,6 +185,7 @@ async def create_new_conversation(
         selected_repository,
         selected_branch,
         conversation_trigger,
+        conversation_title,
         git_provider,
     )
 

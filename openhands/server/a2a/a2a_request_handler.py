@@ -585,6 +585,7 @@ class A2aRequestHandler:
             replay_json=data.replay_json,
             conversation_trigger=ConversationTrigger.SUGGESTED_TASK,
             conversation_instructions=data.conversation_instructions,
+            conversation_title=f"A2A {context_id}",
             git_provider=git_provider,
             conversation_id=context_id,
             mcp_config=data.mcp_config,
