@@ -4,38 +4,24 @@ import base64
 from collections.abc import AsyncGenerator
 from copy import copy
 from datetime import datetime, timezone, UTC
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from uuid import uuid4
-
 from a2a.server.events import Event as A2AEvent
 from a2a.types import (
-    Artifact,
-    Message as A2AMessage,
-    MessageSendParams,
-    Role,
-    Task,
-    TaskIdParams,
-    TaskNotFoundError,
-    TaskPushNotificationConfig,
-    TaskQueryParams,
-    TaskState,
-    TaskStatus,
-    UnsupportedOperationError,
-    InvalidParamsError,
-    TextPart,
-    FilePart, FileWithBytes
+    Artifact, MessageSendParams, Role, Task, TaskIdParams, TaskQueryParams, TaskState,
+    TaskStatus, TextPart, FilePart, FileWithBytes, TaskPushNotificationConfig, Message as A2AMessage,
+    TaskNotFoundError, UnsupportedOperationError, InvalidParamsError, InternalError,
 )
-
 from a2a.utils.errors import ServerError
-from a2a.utils.telemetry import SpanKind, trace_class
 
 from openhands.core.exceptions import AgentRuntimeUnavailableError
 from openhands.core.logger import openhands_logger as logger
 from openhands.core.schema import ActionType
 from openhands.core.schema.agent import AgentState
 from openhands.events import EventStreamSubscriber
-from openhands.events.action import NullAction, SystemMessageAction, RecallAction, Action, ChangeAgentStateAction, \
-    MessageAction
+from openhands.events.action import (
+    NullAction, SystemMessageAction, RecallAction, Action, ChangeAgentStateAction, MessageAction
+)
 from openhands.events.event import Event, EventSource
 
 from openhands.events.observation import NullObservation
@@ -47,16 +33,12 @@ from openhands.server.services.conversation_service import create_new_conversati
 from openhands.server.session.agent_session import AgentSession
 from openhands.server.session.conversation_init_data import ConversationInitData
 from openhands.server.shared import (
-    SecretsStoreImpl,
-    SettingsStoreImpl,
-    config,
-    server_config,
-    conversation_manager
+    SecretsStoreImpl, SettingsStoreImpl, config, server_config, conversation_manager
 )
 from openhands.server.types import AppMode
-from openhands.server.user_auth import AuthType
 from openhands.storage.data_models.conversation_metadata import ConversationTrigger
 from openhands.storage.data_models.secrets import Secrets
+
 
 TASK_TERMINAL_STATES = (TaskState.failed, TaskState.canceled, TaskState.completed, TaskState.rejected)
 METADATA_NAME_PREFIX = "openhands"
@@ -66,8 +48,9 @@ AUTO_CONTINUE_RESPONSE = (
     'IMPORTANT: YOU SHOULD NOT ASK FOR HUMAN RESPONSE UNTIL USER CONTACT YOU HIMSELF.\n'
 )
 
-A2A_UPDATED_AT_CALLBACK_ID = 'a2a_updated_at_callback_id'
-TIMEOUT_FOR_CONVERSATION_TIME = 120.0
+
+A2A_SUBSCRIBE_ID = 'a2a_task_{task_id}'
+
 
 class A2AOHTaskWrapper:
 
@@ -78,14 +61,11 @@ class A2AOHTaskWrapper:
             metadata: dict[str, Any] | None = None,
     ):
 
-        self.first = False
         if metadata is None:
             metadata: dict[str, Any] = dict()
 
         self.task_id = task_id
-        self.status = TaskStatus(
-            state=TaskState.submitted,
-        )
+        self.status = TaskStatus(state=TaskState.submitted)
         self.history: list[A2AMessage] = list()
         # TODO: Необходимо придумать способ хранить zip-архивы тасок
         #  на диске, чтобы в рамках одного контекста можно было отдавать разные
@@ -96,15 +76,13 @@ class A2AOHTaskWrapper:
         self.events: dict[int, Event] = dict()
         self.is_finished = False
         self.subscribed = False
+        self._unsubscribe_event = asyncio.Event()
+        self.agent_session: Optional[AgentSession] = None
 
         auto_continue = metadata.get(f"{METADATA_NAME_PREFIX}/auto-continue", False)
-        show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
-
         metadata[f"{METADATA_NAME_PREFIX}/auto-continue"] = auto_continue
-        metadata[f"{METADATA_NAME_PREFIX}/show-all-events"] = show_all_events
 
         self.auto_continue = auto_continue
-        self.show_all_events = show_all_events
         self.metadata = metadata
         self.context_id = context_id
 
@@ -237,10 +215,17 @@ class A2AOHTaskWrapper:
         #  Otherwise it will duplicate user messages
         message = A2AMessage(
             role=Role.user if event.source == EventSource.USER else Role.agent,
-            message_id=f"{task_id}-{event.id}",
+
+            # TODO: Добавить проверку на уникальность message_id
+            message_id=(
+                getattr(event, "a2a_metadata", dict()).get("message_id", f"{task_id}-{event.id}")
+            ),
+
             context_id=self.context_id,
+
             # TODO: Add multiple parts
             parts=[TextPart(text=event.message if event.message is not None else "")],
+
             task_id=task_id,
             metadata={
                 f"{METADATA_NAME_PREFIX}/event-source": event.source,
@@ -269,9 +254,7 @@ class A2AOHTaskWrapper:
                             and agent_state == AgentState.AWAITING_USER_INPUT
                             and isinstance(event, AgentStateChangedObservation)
                     ):
-                        # TODO: Add log message
-                        agent_session = conversation_manager.get_agent_session(self.context_id)
-                        agent_session.event_stream.add_event(
+                        self.agent_session.event_stream.add_event(
                             MessageAction(content=AUTO_CONTINUE_RESPONSE),
                             EventSource.USER,
                         )
@@ -298,12 +281,56 @@ class A2AOHTaskWrapper:
                         parts=[FilePart(file=file)]
                     ))
 
-    # TODO: Reuse openhands.server.routes.files.py::zip_current_workspace::185 ?
+            # Прямой вызов event_stream.unsubscribe невозможен, так как при его вызове
+            # происходит thread_pool.shutdown() из того же потока, который находится в пуле,
+            # что приводит к исключению. Один из аккуратных выходов из этой ситуации - создать флаг `asyncio.Event`,
+            # и когда нужно выполнить unsubscribe, мы устанавливаем этот флаг. При subscribe мы в фон сразу же
+            # создаём вызов `unsubscribe`, в котором выполняется ожидание флага.
+            self._unsubscribe_event.set()
+
+    async def subscribe(self):
+
+        if self.subscribed:
+            return
+
+        self.agent_session.event_stream.subscribe(
+            EventStreamSubscriber.SERVER,
+            self.on_event,
+            A2A_SUBSCRIBE_ID.format(task_id=self.task_id),
+        )
+
+        self.subscribed = True
+        self._unsubscribe_event = asyncio.Event()
+
+        asyncio.create_task(self.unsubscribe())
+
+    async def unsubscribe(self):
+
+        if not self.subscribed:
+            return
+
+        await self._unsubscribe_event.wait()
+
+        self.agent_session.event_stream.unsubscribe(
+            EventStreamSubscriber.SERVER,
+            A2A_SUBSCRIBE_ID.format(task_id=self.task_id)
+        )
+
+        self.subscribed = False
+
+    def set_agent_session(self) -> Optional[AgentSession]:
+        agent_session = conversation_manager.get_agent_session(self.context_id)
+
+        if agent_session is None:
+            logger.error(f"No agent_session for {self.context_id} after waiting")
+
+        self.agent_session = agent_session
+        return agent_session
+
     def zip_current_workspace(self) -> FileWithBytes | None:
         try:
             logger.debug('Zipping workspace')
-            agent_session = conversation_manager.get_agent_session(self.context_id)
-            runtime: Runtime = agent_session.runtime
+            runtime: Runtime = self.agent_session.runtime
             path = runtime.config.workspace_mount_path_in_sandbox
             try:
                 zip_file_path = runtime.copy_from(path)
@@ -324,21 +351,13 @@ class A2AOHTaskWrapper:
             logger.error(f'Error zipping workspace: {e}')
 
 
-    def agent_session_is_started(self):
-        agent_session = conversation_manager.get_agent_session(self.context_id)
-        if agent_session is None:
-            return False
-        return agent_session.runtime is not None or agent_session.controller is not None
-
-
-
-@trace_class(kind=SpanKind.SERVER)
 class A2aRequestHandler:
 
+    # task_id -> task
     _tasks: dict[str, A2AOHTaskWrapper] = dict()
+
+    # context_id -> task
     _current_session_tasks: dict[str, A2AOHTaskWrapper] = dict()
-    # TODO: Бесшовно интегрировать с имеющимися сессиями.
-    #  Нужно подтягивать в том числе и обычные сессии, а не только A2A.
 
     def _get_task_by_id(self, task_id: str) -> A2AOHTaskWrapper:
         task: A2AOHTaskWrapper | None = self._tasks.get(task_id, None)
@@ -348,29 +367,23 @@ class A2aRequestHandler:
 
         return task
 
-    def _check_task(self, task: A2AOHTaskWrapper, context_id: str) -> (bool, A2AOHTaskWrapper):
-        cur_task = None
-        last_task = None
-        if context_id in self._current_session_tasks.keys():
-            cur_task = self._current_session_tasks[context_id]
-        if cur_task is not None:
-            if cur_task.status.state not in TASK_TERMINAL_STATES:
-                task.update_status(TaskState.rejected,
-                                   text="You cannot run multiple tasks simultaneously in the context")
-                return False, None
-            else:
-                last_task = cur_task
+    def check_if_no_tasks_running_for_context(self, task: A2AOHTaskWrapper, context_id: str) -> bool:
+        current_task = self._current_session_tasks.get(context_id, None)
+
+        if current_task is not None and current_task.status.state not in TASK_TERMINAL_STATES:
+            task.update_status(
+                TaskState.rejected, text="You cannot run multiple tasks simultaneously in the context"
+            )
+            return False
 
         self._current_session_tasks[context_id] = task
-
-        # TODO: Add check if agent name stay the same in metadata, otherwise throw an exception.
-        return True, last_task
+        return True
 
     async def on_cancel_task(self, params: TaskIdParams, context) -> Task | None:
         # TODO: Check if it will work in case of task is canceled while runtime is starting.
         task = self._get_task_by_id(params.id)
         asyncio.create_task(
-            self._background_task(params, task)
+            self.process_message(params, task)
         )
         task.update_status(TaskState.canceled)
         return task.to_response()
@@ -389,22 +402,30 @@ class A2aRequestHandler:
             task_id = uuid4().hex
 
         context_id = params.message.context_id
-        task = A2AOHTaskWrapper(task_id=task_id, metadata=copy(params.metadata), context_id=context_id)
 
         if task_id not in self._tasks:
+
+            # New task
+
+            task = A2AOHTaskWrapper(task_id=task_id, metadata=copy(params.metadata), context_id=context_id)
+
             if context_id is None or conversation_manager.get_agent_session(task.context_id) is None:
+
+                # No OH-conversation found, create new one
+
+                # FIXME: Не уверен, что допустимо генерить context_id на стороне клиента
                 if context_id is None:
                     context_id = uuid4().hex
 
                 task.context_id = context_id
-                # FIXME: Не уверен, что допустимо генерить context_id на стороне клиента
-                initial_user_msg = params.message.parts[0].root.text
+                try:
+                    await self.create_new_conversation(params=params, context_id=context_id)
+                except Exception as e:
+                    logger.error(error_msg := f'Error creating new conversation: {e}')
+                    # task.update_status(TaskState.failed, text=error_msg)
+                    raise ServerError(error=InternalError(message=error_msg))
 
-                asyncio.create_task(self._new_conversation(params=params,
-                                             context_id=context_id,
-                                             user_id=None,
-                                             initial_user_msg=None))
-
+            # TODO: Add check if agent name stay the same in metadata for the same context, otherwise throw an exception.
             self._tasks[task.task_id] = task
         else:
             task = self._tasks[task_id]
@@ -413,31 +434,16 @@ class A2aRequestHandler:
                     message="The task already is in terminal state, you cannot interact it"
                 ))
 
-        user_message = copy(params.message)
-        user_message.context_id = task.context_id
-        task.history.append(user_message)
+        check_status = self.check_if_no_tasks_running_for_context(task=task, context_id=context_id)
 
-        if not task.agent_session_is_started():
-            task.history.append(
-                A2AMessage(
-                    context_id=task.context_id,
-                    role=Role.agent,
-                    parts=[TextPart(text="server is preparing")],
-                    message_id=uuid4().hex,
-                    task_id=task_id,
-                    kind="message",
-                )
-            )
+        if check_status:
 
-        # Update state after the input-required next message
-        if task.status.state == TaskState.input_required:
-            task.update_status(TaskState.working)
+            # Update state after the input-required next message
+            if task.status.state == TaskState.input_required:
+                task.update_status(TaskState.working)
 
-        check, last_task = self._check_task(task=task, context_id=context_id)
-
-        if check:
             asyncio.create_task(
-                self._background_task(params, task, last_task)
+                self.process_message(params, task)
             )
 
         return task.to_response(
@@ -536,11 +542,9 @@ class A2aRequestHandler:
                 'Settings not found', {'msg_id': 'CONFIGURATION$SETTINGS_NOT_FOUND'}
             )
 
-        session_init_args: dict = {}
+        session_init_args: dict = dict()
         if params.metadata is not None:
-            agent_name = params.metadata.get(f'{METADATA_NAME_PREFIX}/agent', None)
-
-            if agent_name is not None:
+            if agent_name := params.metadata.get(f'{METADATA_NAME_PREFIX}/agent', None):
                 session_init_args['agent'] = agent_name
 
         if settings:
@@ -557,119 +561,78 @@ class A2aRequestHandler:
 
         return conversation_init_data
 
-    async def _new_conversation(self,
-                                params: MessageSendParams | TaskQueryParams | TaskIdParams,
-                                context_id: str,
-                                user_id: str | None = None,
-                                auth_type: AuthType | None = None,
-                                initial_user_msg: str | None = None,
-                                ):
+    async def create_new_conversation(self,
+                                      params: MessageSendParams | TaskQueryParams | TaskIdParams,
+                                      context_id: str,
+                                      user_id: str | None = None):
 
         data = await self._conversation_init_data_set(params=params, user_id=user_id)
 
         logger.info(f'Initializing_new_conversation:{data}')
         repository = data.selected_repository
-        selected_branch = data.selected_branch
-        image_urls = []
-        replay_json = data.replay_json
         git_provider = data.git_provider
-        conversation_instructions = data.conversation_instructions
-        conversation_trigger = ConversationTrigger.SUGGESTED_TASK
 
-        if auth_type == AuthType.BEARER:
-            conversation_trigger = ConversationTrigger.REMOTE_API_KEY
+        if repository:
+            await ProviderHandler(data.git_provider_tokens).verify_repo_provider(repository, git_provider)
 
-        try:
-            if repository:
-                provider_handler = ProviderHandler(data.git_provider_tokens)
-                await provider_handler.verify_repo_provider(repository, git_provider)
+        agent_loop_info = await create_new_conversation(
+            user_id=user_id,
+            git_provider_tokens=data.git_provider_tokens,
+            custom_secrets=data.custom_secrets,
+            selected_repository=repository,
+            selected_branch=data.selected_branch,
+            initial_user_msg=None,
+            image_urls=list(),
+            replay_json=data.replay_json,
+            conversation_trigger=ConversationTrigger.SUGGESTED_TASK,
+            conversation_instructions=data.conversation_instructions,
+            git_provider=git_provider,
+            conversation_id=context_id,
+            mcp_config=data.mcp_config,
+        )
 
-            conversation_id = context_id
-            agent_loop_info = await create_new_conversation(
-                user_id=user_id,
-                git_provider_tokens=data.git_provider_tokens,
-                custom_secrets=data.custom_secrets,
-                selected_repository=repository,
-                selected_branch=selected_branch,
-                initial_user_msg=initial_user_msg,
-                image_urls=image_urls,
-                replay_json=replay_json,
-                conversation_trigger=conversation_trigger,
-                conversation_instructions=conversation_instructions,
-                git_provider=git_provider,
-                conversation_id=conversation_id,
-                mcp_config=data.mcp_config,
-            )
-        except RuntimeError as e:
-            logger.error(f"Exception on init conversation: {e}")
-
-
-    async def _background_task(
+    async def process_message(
             self,
             params: MessageSendParams | TaskQueryParams | TaskIdParams,
-            task: A2AOHTaskWrapper,
-            last_task: A2AOHTaskWrapper | None = None
+            task: A2AOHTaskWrapper
     ) -> None:
-        if not task.agent_session_is_started():
-            await self.wait_for_agent(task.context_id)
-        await self._event_subscription(task, last_task)
-        if task.status.state == TaskState.input_required:
-            task.update_status(TaskState.working)
-        await self.dispatch(params, task)
-        logger.debug(f"Finished background task for message {params}")
 
-    async def wait_for_agent(self, context_id: str):
-        deadline = asyncio.get_event_loop().time() + TIMEOUT_FOR_CONVERSATION_TIME
-        while asyncio.get_event_loop().time() < deadline:
-            agent_session = conversation_manager.get_agent_session(context_id)
-            if agent_session is not None:
-                break
-            await asyncio.sleep(0.05)
+        try:
 
-        deadline = asyncio.get_event_loop().time() + TIMEOUT_FOR_CONVERSATION_TIME
-        while asyncio.get_event_loop().time() < deadline:
-            state = conversation_manager.get_agent_session(context_id).get_state()
-            if state == AgentState.AWAITING_USER_INPUT or state == AgentState.FINISHED:
-                break
-            await asyncio.sleep(0.05)
+            task.set_agent_session()
+            await task.subscribe()
+
+            # Wait for agent become ready
+            await conversation_manager.get_agent_session(task.context_id).is_ready.wait()
+
+            if task.status.state == TaskState.input_required:
+                task.update_status(TaskState.working)
+            await self.dispatch(params, task)
+            logger.debug(f"Finished background task for message {params}")
+        except Exception as e:
+            logger.error(error_msg := f'Exception while processing message: {e}')
+            task.update_status(TaskState.failed, text=error_msg)
 
     async def dispatch(self,
                        params: MessageSendParams | TaskQueryParams | TaskIdParams,
                        task: A2AOHTaskWrapper) -> None:
+
         try:
-            agent_session: AgentSession = conversation_manager.get_agent_session(task.context_id)
+
+            a2a_metadata = {"message_id": params.message.message_id}
 
             if isinstance(params, MessageSendParams):
+                event = MessageAction(content=params.message.parts[0].root.text, image_urls=[])
+                event.a2a_metadata = a2a_metadata
 
-                text = params.message.parts[0].root.text
-                action = MessageAction(content=text, image_urls=[])
-                message_data = event_to_dict(action)
-                await conversation_manager.send_event_to_conversation(
-                    task.context_id, message_data
-                )
+                # TODO: Сделать отправку ивентов одинаковыми в обоих случаях
+                await conversation_manager.send_event_to_conversation(sid=task.context_id, data=event_to_dict(event))
 
             elif isinstance(params, (TaskQueryParams, TaskIdParams)):
-                action = ChangeAgentStateAction(agent_state=AgentState.STOPPED)
-                agent_session.event_stream.add_event(action, EventSource.USER)
+                event = ChangeAgentStateAction(agent_state=AgentState.STOPPED)
+                event.a2a_metadata = a2a_metadata
+
+                task.agent_session.event_stream.add_event(event=event, source=EventSource.USER)
         except Exception as e:
-            logger.error(f'Error adding message to conversation: {e}')
-
-    async def _event_subscription(self, task: A2AOHTaskWrapper, last_task: A2AOHTaskWrapper | None) -> None:
-
-        agent_session = conversation_manager.get_agent_session(task.context_id)
-        if agent_session is None:
-            logger.error(f"No agent_session for {task.context_id} after waiting")
-            return
-
-        if last_task is not None:
-            agent_session.event_stream.unsubscribe(EventStreamSubscriber.SERVER,
-                A2A_UPDATED_AT_CALLBACK_ID + "_" + str(last_task.task_id))
-
-        if not task.subscribed:
-            agent_session.event_stream.subscribe(
-                EventStreamSubscriber.SERVER,
-                task.on_event,
-                A2A_UPDATED_AT_CALLBACK_ID + "_" + str(task.task_id),
-            )
-
-            task.subscribed = True
+            logger.error(error_msg := f'Error adding message to conversation: {e}')
+            task.update_status(TaskState.failed, text=error_msg)

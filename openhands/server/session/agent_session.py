@@ -53,6 +53,7 @@ class AgentSession:
     file_store: FileStore
     controller: AgentController | None = None
     runtime: Runtime | None = None
+    is_ready: asyncio.Event
 
     memory: Memory | None = None
     _starting: bool = False
@@ -86,6 +87,7 @@ class AgentSession:
         )
         self.llm_registry = llm_registry
         self.conversation_stats = conversation_stats
+        self.is_ready = asyncio.Event()
 
     async def start(
         self,
@@ -203,6 +205,7 @@ class AgentSession:
             finished = True
         finally:
             self._starting = False
+            self.is_ready.set()
             success = finished and runtime_connected
             duration = time.time() - started_at
 
