@@ -413,7 +413,6 @@ class A2aRequestHandler:
 
                 # No OH-conversation found, create new one
 
-                # FIXME: Не уверен, что допустимо генерить context_id на стороне клиента
                 if context_id is None:
                     context_id = uuid4().hex
 
