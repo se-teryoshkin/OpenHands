@@ -214,6 +214,18 @@ class LLM(RetryMixin, DebugMixin):
             seed=self.config.seed,
             **kwargs,
         )
+        self._log_llm_call_parameters(
+            {
+                'model': self.config.model,
+                'base_url': self.config.base_url,
+                'api_version': self.config.api_version,
+                'custom_llm_provider': self.config.custom_llm_provider,
+                'timeout': self.config.timeout,
+                'drop_params': self.config.drop_params,
+                'seed': self.config.seed,
+                **kwargs,
+            }
+        )
 
         self._completion_unwrapped = self._completion
 
@@ -422,6 +434,20 @@ class LLM(RetryMixin, DebugMixin):
         Check the complete documentation at https://litellm.vercel.app/docs/completion
         """
         return self._completion
+
+    def _log_llm_call_parameters(self, params: dict[str, Any]) -> None:
+        """Log the configured parameters used when calling the LLM."""
+        sensitive_keys = {'aws_access_key_id', 'aws_secret_access_key', 'api_key'}
+        sanitized = {
+            key: value
+            for key, value in params.items()
+            if key not in sensitive_keys and value is not None
+        }
+        logger.debug(
+            'LLM call parameters configured for %s: %s',
+            self.config.model,
+            sanitized,
+        )
 
     def init_model_info(self) -> None:
         if self._tried_model_info:

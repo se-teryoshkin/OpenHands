@@ -1,0 +1,39 @@
+services:
+  openhands:
+    build:
+      context: ./
+      dockerfile: ./containers/app/Dockerfile
+    image: openhands-local-version-a2a:0.1
+    container_name: openhands-instance-local-version
+    environment:
+      BACKEND_HOST: "192.168.1.54"
+      BACKEND_PORT: "3000"
+      SANDBOX_RUNTIME_CONTAINER_IMAGE: "10.32.15.3:5000/all-hands-ai/runtime:0.59-nikolaik-appfactory-components"
+      LOG_ALL_EVENTS: "true"
+      DEBUG: "true"
+
+      LLM_API_KEY: "KEY_HERE"
+      LLM_BASE_URL: "https://foundation-models.api.cloud.ru/v1"
+      LLM_PROVIDER: "hosted_vllm"
+      LLM_MODEL: "hosted_vllm/Qwen/Qwen3-Coder-480B-A35B-Instruct"
+      LLM_TEMPERATURE: "0.7"
+      LLM_TOP_P: "0.8"
+      LLM_TOP_K: "20"
+      LLM_COMPLETION_KWARGS: '{"repetition_penalty": 1.05}'
+
+
+      SANDBOX_VOLUMES: "/Users/ngc436/Documents/projects/app-factory/AppFactory-components/docs/build/markdown:/appfactory_docs:ro,/Users/ngc436/Documents/projects/app-factory/AppFactory-components/.misc/specs:/specs:ro,/Users/ngc436/Documents/projects/app-factory/AppFactory-components:/appfactory_components:ro,/Users/ngc436/Documents/projects/OpenHands/.misc/web-instance/app:/workspace:z" # поменять пути
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "a6k2.dgx:10.32.15.89"
+      - "d.dgx:10.32.2.11"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Users/ngc436/Documents/projects/OpenHands/.misc/web-instance/.openhands:/.openhands:z # opendands-fork - текущий репо
+      - /Users/ngc436/Documents/projects/OpenHands/openhands:/app/openhands:z
+      - /Users/ngc436/Documents/projects/OpenHands/microagents:/app/microagents:z
+      - /Users/ngc436/Documents/projects/OpenHands/containers/app/entrypoint.sh:/app/entrypoint.sh:ro
+      - /Users/ngc436/Documents/projects/OpenHands/.misc/web-instance/workspace:/opt/workspace_base:z # workspace для настроек
+      - /Users/ngc436/.cursor/worktrees/OpenHands/oln/.misc/docker-config/config.json:/root/.docker/config.json:ro # Minimal docker config for registry access
