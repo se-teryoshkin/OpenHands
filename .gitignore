@@ -260,3 +260,7 @@ test-results
 .sessions
 .eval_sessions
 .misc
+
+# artifacts
+tmp_data
+test_data
