@@ -163,7 +163,7 @@ def run_review_example(
         # Create configuration - will automatically use GPT_OSS_* env vars
         config = ReviewAgentConfig(
             verbose=debug,
-            max_iterations=15,
+            max_iterations=25,  # Increased to allow more thorough review
         )
 
         print()

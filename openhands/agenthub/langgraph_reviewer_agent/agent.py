@@ -125,6 +125,15 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
 - Check that all required interface methods are implemented
 - Verify data model field mappings are correct
 
+## CRITICAL Rules for Efficiency
+
+1. **ONLY use the tools listed above** - DO NOT invent tools like "search" or "grep"
+2. **Use absolute file paths** - do NOT use relative paths like "../.."
+3. **DO NOT repeat failed tool calls** - if a tool returns an error, try a different approach
+4. **After reporting issues with create_review_comment_tool, FINISH by calling finalize_review_tool**
+5. **Limit exploration** - read each file only once, use find_python_files_tool to discover files
+6. **Be decisive** - identify issues quickly, report them, and finalize
+
 ## Field-Level Mapping Validation
 
 When the specification defines a target model (like VacancyResponse) that should be created from a source model (like VacancyDraft), use validate_model_field_mapping_tool to:
