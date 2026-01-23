@@ -8,14 +8,22 @@ The agent uses a ReAct (Reasoning + Acting) pattern to:
 """
 
 import json
+import logging
 import os
+import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
-from langgraph.graph.graph import CompiledGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
 from openhands.agenthub.langgraph_reviewer_agent.models import ReviewResult, ReviewComment
@@ -25,6 +33,41 @@ from openhands.agenthub.langgraph_reviewer_agent.tools.report_tool import (
     get_review_comments,
     get_files_reviewed,
 )
+
+
+# Configure module logger
+logger = logging.getLogger("code_review_agent")
+
+
+def setup_debug_logging(level: int = logging.DEBUG):
+    """Setup detailed debug logging for the agent.
+
+    Args:
+        level: Logging level (default DEBUG)
+    """
+    # Create formatter with detailed info
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%H:%M:%S"
+    )
+
+    # Console handler with colors
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(formatter)
+
+    # Set up the logger
+    logger.setLevel(level)
+    logger.handlers = []  # Clear existing handlers
+    logger.addHandler(console_handler)
+
+    # Also configure langchain/langgraph logging if debug
+    if level == logging.DEBUG:
+        for log_name in ["langchain", "langgraph", "httpx"]:
+            log = logging.getLogger(log_name)
+            log.setLevel(logging.WARNING)  # Keep these quieter
+
+    return logger
 
 
 # System prompt for the code review agent
@@ -42,6 +85,7 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
    - Use validate_signatures_tool to check if method signatures match the spec
    - Use validate_field_access_tool to check for access to non-existent fields
    - Use validate_mapping_tool to verify data mappings are complete
+   - Use validate_model_field_mapping_tool for detailed field-level validation between source/target models
    - Use validate_test_quality_tool to assess test coverage
 
 5. **Check Project Structure**: Use validate_structure_tool to ensure proper organization.
@@ -58,10 +102,12 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
 - `signature_mismatch`: Method signatures don't match specification
 - `field_access_error`: Accessing non-existent fields on objects
 - `mapping_incomplete`: Missing required field mappings
+- `field_mapping_error`: Field-level mapping issues (missing fields like area, work_format, employment_type)
 - `test_quality`: Test coverage or quality issues
 - `structure_issue`: File organization problems
 - `missing_implementation`: Required features not implemented
 - `type_error`: Type annotation issues
+- `pydantic_issue`: Issues with Pydantic model usage
 - `general`: Other issues
 
 ## Severity Levels
@@ -78,6 +124,21 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
 - If mocking is explicitly forbidden in the spec, flag any use of mocks as errors
 - Check that all required interface methods are implemented
 - Verify data model field mappings are correct
+
+## Field-Level Mapping Validation
+
+When the specification defines a target model (like VacancyResponse) that should be created from a source model (like VacancyDraft), use validate_model_field_mapping_tool to:
+1. Extract all fields from both source and target model definitions
+2. Check that every required field in the target model is being populated
+3. Identify common missing fields like: area, work_format, employment_type, salary
+4. Verify type compatibility between source and target fields
+5. Report any unmapped required fields as errors with suggestions for mapping
+
+Common field mapping issues to detect:
+- Missing `area` field (region/location) - often maps from source `area` or `region`
+- Missing `work_format` field - often maps from `schedule` or `working_format`
+- Missing `employment_type` field - often maps from `employment` or `employments`
+- Incorrect type conversions (e.g., SalaryInfo vs VacancySalaryInfoView)
 """
 
 
@@ -95,20 +156,65 @@ class CodeReviewAgent:
     - GPT_OSS_MODEL_NAME: Model name
     """
 
-    def __init__(self, config: ReviewAgentConfig | None = None):
+    def __init__(self, config: ReviewAgentConfig | None = None, debug: bool = False):
         """Initialize the code review agent.
 
         Args:
             config: Optional configuration. If not provided, uses defaults from env.
+            debug: If True, enable detailed debug logging.
         """
         self.config = config or ReviewAgentConfig.from_env()
-        self._agent: CompiledGraph | None = None
+        self._agent: CompiledStateGraph | None = None
         self._llm: ChatOpenAI | None = None
+        self.debug = debug or self.config.verbose
+
+        if self.debug:
+            setup_debug_logging(logging.DEBUG)
+
+        self._step_count = 0
+        self._start_time: datetime | None = None
+
+    def _log_step(self, step_type: str, content: str, **kwargs):
+        """Log a step in the agent execution.
+
+        Args:
+            step_type: Type of step (THOUGHT, TOOL_CALL, TOOL_RESULT, etc.)
+            content: Content to log
+            **kwargs: Additional key-value pairs to log
+        """
+        if not self.debug:
+            return
+
+        self._step_count += 1
+        elapsed = ""
+        if self._start_time:
+            elapsed = f" [+{(datetime.now() - self._start_time).total_seconds():.1f}s]"
+
+        # Format the log message
+        header = f"═══ Step {self._step_count}: {step_type}{elapsed} ═══"
+        logger.debug("=" * len(header))
+        logger.debug(header)
+        logger.debug("=" * len(header))
+
+        # Log content (truncate if too long)
+        if len(content) > 2000:
+            logger.debug(f"{content[:2000]}... (truncated, {len(content)} chars total)")
+        else:
+            logger.debug(content)
+
+        # Log any additional kwargs
+        for key, value in kwargs.items():
+            if isinstance(value, (dict, list)):
+                logger.debug(f"  {key}: {json.dumps(value, indent=2, ensure_ascii=False)[:500]}")
+            else:
+                logger.debug(f"  {key}: {value}")
 
     @property
     def llm(self) -> ChatOpenAI:
         """Get the LLM instance, creating it if needed."""
         if self._llm is None:
+            logger.debug(f"Creating LLM: model={self.config.llm_model_name}, "
+                        f"base_url={self.config.llm_base_url}")
             self._llm = ChatOpenAI(
                 model=self.config.llm_model_name,
                 temperature=self.config.temperature,
@@ -118,7 +224,7 @@ class CodeReviewAgent:
         return self._llm
 
     @property
-    def agent(self) -> CompiledGraph:
+    def agent(self) -> CompiledStateGraph:
         """Get the agent graph, creating it if needed."""
         if self._agent is None:
             # Select tools based on config
@@ -138,11 +244,14 @@ class CodeReviewAgent:
 
                 tools.append(tool)
 
+            tool_names = [t.name for t in tools]
+            logger.debug(f"Creating ReAct agent with {len(tools)} tools: {tool_names}")
+
             # Create the ReAct agent using langgraph
             self._agent = create_react_agent(
                 model=self.llm,
                 tools=tools,
-                state_modifier=SYSTEM_PROMPT,
+                prompt=SYSTEM_PROMPT,
             )
 
         return self._agent
@@ -168,6 +277,12 @@ class CodeReviewAgent:
         """
         # Reset state for new review
         reset_review_state()
+        self._step_count = 0
+        self._start_time = datetime.now()
+
+        logger.info(f"Starting code review for module: {module_name}")
+        logger.info(f"  Spec: {spec_path}")
+        logger.info(f"  Code: {code_root}")
 
         # Build the review request message
         request_parts = [
@@ -195,38 +310,87 @@ class CodeReviewAgent:
 
         request = "\n".join(request_parts)
 
-        # Run the agent
-        result = self.agent.invoke({
-            "messages": [HumanMessage(content=request)],
-        })
+        self._log_step("USER_REQUEST", request)
 
-        # Extract the final review result from the last message
-        messages = result.get("messages", [])
-
-        # Look for the finalize_review_tool result
+        # Run the agent with streaming to capture all steps
         review_result = None
-        for msg in reversed(messages):
-            if hasattr(msg, "content") and isinstance(msg.content, str):
-                if '"module_name"' in msg.content and '"passed"' in msg.content:
-                    try:
-                        data = json.loads(msg.content)
-                        review_result = data
-                        break
-                    except json.JSONDecodeError:
-                        pass
+
+        # Set recursion limit based on max_iterations config
+        stream_config = {"recursion_limit": self.config.max_iterations * 3}
+
+        try:
+            for event in self.agent.stream(
+                {"messages": [HumanMessage(content=request)]},
+                stream_mode="values",
+                config=stream_config,
+            ):
+                messages = event.get("messages", [])
+                if not messages:
+                    continue
+
+                last_msg = messages[-1]
+
+                # Log based on message type
+                if isinstance(last_msg, AIMessage):
+                    # Check for tool calls
+                    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+                        for tc in last_msg.tool_calls:
+                            self._log_step(
+                                "TOOL_CALL",
+                                f"Calling tool: {tc['name']}",
+                                tool_name=tc["name"],
+                                arguments=tc.get("args", {})
+                            )
+                    elif last_msg.content:
+                        # This is a thought/reasoning step
+                        content = last_msg.content
+                        if isinstance(content, str):
+                            if '"module_name"' in content and '"passed"' in content:
+                                self._log_step("FINAL_RESULT", content)
+                                try:
+                                    review_result = json.loads(content)
+                                except json.JSONDecodeError:
+                                    pass
+                            else:
+                                self._log_step("THOUGHT", content)
+
+                elif isinstance(last_msg, ToolMessage):
+                    # Tool result
+                    content = last_msg.content
+                    tool_name = getattr(last_msg, "name", "unknown")
+                    self._log_step(
+                        "TOOL_RESULT",
+                        f"Result from {tool_name}:",
+                        result=content[:1000] if len(content) > 1000 else content
+                    )
+
+        except Exception as e:
+            # Log the error but continue with partial results
+            logger.warning(f"Agent stopped early: {e}")
+            logger.info("Returning partial results collected so far...")
+
+        # Always collect comments from the review state
+        # The agent may output its own summary but comments are recorded via tools
+        collected_comments = get_review_comments()
+        collected_files = get_files_reviewed()
 
         # If no proper result, construct one from collected comments
         if not review_result:
-            comments = get_review_comments()
-            error_count = sum(1 for c in comments if c.get("severity") == "error")
-
+            error_count = sum(1 for c in collected_comments if c.get("severity") == "error")
             review_result = {
                 "module_name": module_name,
                 "passed": error_count == 0,
                 "summary": "Review completed",
-                "comments": comments,
-                "files_reviewed": get_files_reviewed(),
+                "comments": collected_comments,
+                "files_reviewed": collected_files,
             }
+        else:
+            # Agent provided summary, but use collected comments and files
+            # as the agent may not include them in its JSON output
+            if not review_result.get("comments"):
+                review_result["comments"] = collected_comments
+            if not review_result.get("files_reviewed"):
+                review_result["files_reviewed"] = collected_files
 
         # Convert to ReviewResult model
         comments = [
@@ -242,9 +406,14 @@ class CodeReviewAgent:
             for c in review_result.get("comments", [])
         ]
 
+        elapsed = (datetime.now() - self._start_time).total_seconds()
+        logger.info(f"Review completed in {elapsed:.1f}s with {self._step_count} steps")
+        logger.info(f"  Errors: {sum(1 for c in comments if c.severity.value == 'error')}")
+        logger.info(f"  Warnings: {sum(1 for c in comments if c.severity.value == 'warning')}")
+
         return ReviewResult(
             module_name=review_result.get("module_name", module_name),
-            passed=review_result.get("passed", len([c for c in comments if c.severity == "error"]) == 0),
+            passed=review_result.get("passed", len([c for c in comments if c.severity.value == "error"]) == 0),
             comments=comments,
             summary=review_result.get("summary", ""),
             files_reviewed=review_result.get("files_reviewed", []),
@@ -273,6 +442,8 @@ class CodeReviewAgent:
         """
         # Reset state
         reset_review_state()
+        self._step_count = 0
+        self._start_time = datetime.now()
 
         # Build request
         request_parts = [
@@ -292,37 +463,66 @@ class CodeReviewAgent:
         request = "\n".join(request_parts)
 
         # Stream the agent execution
+        config = {"recursion_limit": self.config.max_iterations * 3}
+
         for event in self.agent.stream(
             {"messages": [HumanMessage(content=request)]},
             stream_mode="values",
+            config=config,
         ):
             messages = event.get("messages", [])
-            if messages:
-                last_msg = messages[-1]
+            if not messages:
+                continue
 
-                # Determine event type based on message
+            last_msg = messages[-1]
+
+            # Determine event type based on message
+            if isinstance(last_msg, AIMessage):
                 if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                     for tc in last_msg.tool_calls:
-                        yield ("tool_call", f"Calling: {tc['name']}")
-                elif hasattr(last_msg, "content"):
+                        self._log_step(
+                            "TOOL_CALL",
+                            f"Calling: {tc['name']}",
+                            arguments=tc.get("args", {})
+                        )
+                        yield ("tool_call", {
+                            "name": tc["name"],
+                            "arguments": tc.get("args", {})
+                        })
+                elif last_msg.content:
                     content = last_msg.content
                     if isinstance(content, str):
                         if '"module_name"' in content and '"passed"' in content:
+                            self._log_step("FINAL_RESULT", content)
                             yield ("final", content)
                         else:
+                            self._log_step("THOUGHT", content)
                             yield ("thought", content)
 
+            elif isinstance(last_msg, ToolMessage):
+                content = last_msg.content
+                tool_name = getattr(last_msg, "name", "unknown")
+                self._log_step("TOOL_RESULT", f"Result from {tool_name}")
+                yield ("tool_result", {
+                    "tool": tool_name,
+                    "result": content
+                })
 
-def create_review_agent(config: ReviewAgentConfig | None = None) -> CodeReviewAgent:
+
+def create_review_agent(
+    config: ReviewAgentConfig | None = None,
+    debug: bool = False
+) -> CodeReviewAgent:
     """Factory function to create a code review agent.
 
     Args:
         config: Optional configuration for the agent.
+        debug: If True, enable detailed debug logging.
 
     Returns:
         Configured CodeReviewAgent instance.
     """
-    return CodeReviewAgent(config)
+    return CodeReviewAgent(config, debug=debug)
 
 
 def run_review(
@@ -331,6 +531,7 @@ def run_review(
     module_name: str,
     config: ReviewAgentConfig | None = None,
     component_docs: str | None = None,
+    debug: bool = False,
 ) -> ReviewResult:
     """Convenience function to run a code review.
 
@@ -340,9 +541,10 @@ def run_review(
         module_name: Name of the module being reviewed.
         config: Optional configuration for the agent.
         component_docs: Optional documentation of external components.
+        debug: If True, enable detailed debug logging.
 
     Returns:
         ReviewResult containing all findings.
     """
-    agent = create_review_agent(config)
+    agent = create_review_agent(config, debug=debug)
     return agent.review(spec_path, code_root, module_name, component_docs)

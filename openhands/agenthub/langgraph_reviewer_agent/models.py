@@ -18,10 +18,12 @@ class IssueCategory(str, Enum):
     SIGNATURE_MISMATCH = "signature_mismatch"
     FIELD_ACCESS_ERROR = "field_access_error"
     MAPPING_INCOMPLETE = "mapping_incomplete"
+    FIELD_MAPPING_ERROR = "field_mapping_error"
     TEST_QUALITY = "test_quality"
     STRUCTURE_ISSUE = "structure_issue"
     MISSING_IMPLEMENTATION = "missing_implementation"
     TYPE_ERROR = "type_error"
+    PYDANTIC_ISSUE = "pydantic_issue"
     GENERAL = "general"
 
 

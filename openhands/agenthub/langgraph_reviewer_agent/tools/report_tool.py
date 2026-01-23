@@ -43,8 +43,8 @@ def create_review_comment_tool(
 
     Args:
         category: Issue category. One of: "signature_mismatch", "field_access_error",
-            "mapping_incomplete", "test_quality", "structure_issue",
-            "missing_implementation", "type_error", "general".
+            "mapping_incomplete", "field_mapping_error", "test_quality", "structure_issue",
+            "missing_implementation", "type_error", "pydantic_issue", "general".
         severity: Severity level. One of: "error", "warning", "info".
         file_path: Path to the file with the issue.
         message: Description of the issue.
@@ -59,8 +59,8 @@ def create_review_comment_tool(
 
     valid_categories = [
         "signature_mismatch", "field_access_error", "mapping_incomplete",
-        "test_quality", "structure_issue", "missing_implementation",
-        "type_error", "general"
+        "field_mapping_error", "test_quality", "structure_issue",
+        "missing_implementation", "type_error", "pydantic_issue", "general"
     ]
 
     valid_severities = ["error", "warning", "info"]
