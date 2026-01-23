@@ -432,6 +432,26 @@ def validate_test_quality_tool(
 
         issues = []
 
+        # Check for superficial hasattr-only tests
+        hasattr_count = code.count("hasattr(")
+        actual_method_calls = 0
+        for method in interface_methods:
+            # Check if the method is actually called (not just hasattr checked)
+            # Look for patterns like: service.method_name( or .method_name(
+            import re
+            call_pattern = rf'\.{method}\s*\('
+            if re.search(call_pattern, code):
+                actual_method_calls += 1
+
+        if hasattr_count > 0 and actual_method_calls == 0:
+            issues.append({
+                "type": "superficial_tests",
+                "message": f"Tests only check method existence with hasattr() ({hasattr_count} times) "
+                           f"but never actually call the methods. Tests should invoke methods and verify behavior.",
+                "hasattr_count": hasattr_count,
+                "actual_calls": actual_method_calls,
+            })
+
         # Check for excessive mocking
         if not allow_mocking and mocked_objects:
             issues.append({

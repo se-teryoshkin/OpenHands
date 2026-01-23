@@ -134,6 +134,13 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
 5. **Limit exploration** - read each file only once, use find_python_files_tool to discover files
 6. **Be decisive** - identify issues quickly, report them, and finalize
 
+## REQUIRED Checks (must do ALL of these)
+
+1. **Signature validation** - Check ALL interface methods match the spec (return types, parameters)
+2. **Field mapping** - Verify ALL required fields from source models are mapped to target models
+3. **Test quality** - Analyze test files and flag if tests are superficial (only hasattr checks) or missing actual assertions
+4. **Report ALL issues found** - Create a review comment for EACH distinct issue before finalizing
+
 ## Field-Level Mapping Validation
 
 When the specification defines a target model (like VacancyResponse) that should be created from a source model (like VacancyDraft), use validate_model_field_mapping_tool to:
@@ -300,13 +307,17 @@ class CodeReviewAgent:
             f"**Specification file:** {spec_path}",
             f"**Code root directory:** {code_root}",
             "",
-            "Steps to follow:",
+            "Steps to follow (YOU MUST COMPLETE ALL STEPS):",
             "1. Read the specification file to understand requirements",
-            "2. Find and analyze all Python files in the code directory",
-            "3. Validate implementations against the specification",
-            "4. Check test quality and coverage",
-            "5. Report all issues found using create_review_comment_tool",
-            "6. Call finalize_review_tool when complete",
+            "2. Use find_python_files_tool to discover all Python files",
+            "3. Read service.py AND test_service.py",
+            "4. Use validate_signatures_tool on service code",
+            "5. Use validate_test_quality_tool on test code - flag superficial tests that only use hasattr()",
+            "6. Check field mappings between source and target models",
+            "7. Create a review comment for EACH issue (minimum: check signature, test quality, field mapping)",
+            "8. Call finalize_review_tool when ALL checks are done",
+            "",
+            "IMPORTANT: Do NOT skip any validation step. Do NOT try to use tools that don't exist.",
         ]
 
         if component_docs:
