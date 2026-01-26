@@ -60,7 +60,8 @@ def create_review_comment_tool(
     valid_categories = [
         "signature_mismatch", "field_access_error", "mapping_incomplete",
         "field_mapping_error", "test_quality", "structure_issue",
-        "missing_implementation", "type_error", "pydantic_issue", "general"
+        "missing_implementation", "type_error", "pydantic_issue",
+        "code_quality_issue", "general"
     ]
 
     valid_severities = ["error", "warning", "info"]

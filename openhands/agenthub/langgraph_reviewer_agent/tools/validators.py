@@ -190,7 +190,7 @@ def validate_field_access_tool(
         class_definition: The class definition with its fields
             (e.g., Pydantic model or dataclass definition).
         variable_pattern: Optional pattern to match variable names
-            (e.g., "vacancy" to check vacancy.* accesses).
+            (e.g., "item" to check item.* accesses).
 
     Returns:
         JSON string with validation results listing any invalid field accesses.
@@ -505,8 +505,8 @@ def validate_model_field_mapping_tool(
 
     This tool performs a comprehensive check to ensure all required fields
     in the target model are properly mapped from the source model.
-    Particularly useful for detecting issues like missing `area`, `work_format`,
-    `employment_type` fields when mapping VacancyDraft to VacancyResponse.
+    Useful for detecting missing field mappings when transforming data
+    between different model representations (e.g., API models to domain models).
 
     Args:
         source_model_definition: The source model definition (e.g., from AppFactory docs).
@@ -769,14 +769,30 @@ def _find_similar_field(target_field: str, source_fields: dict) -> str | None:
         if source_field.lower() == target_lower:
             return source_field
 
-    # Common naming variations
+    # Common naming variations (generic patterns)
     variations = {
-        'area': ['region', 'location', 'city', 'area_id'],
-        'work_format': ['working_format', 'schedule', 'work_schedule', 'working_schedule'],
-        'employment_type': ['employment', 'job_type', 'type', 'employments'],
-        'salary': ['salary_info', 'compensation', 'pay'],
-        'name': ['title', 'job_title', 'position'],
-        'description': ['job_description', 'details', 'text'],
+        # Location-related
+        'area': ['region', 'location', 'city', 'zone', 'area_id'],
+        'location': ['area', 'region', 'city', 'address', 'place'],
+        # Time/schedule-related
+        'schedule': ['format', 'working_format', 'time_format'],
+        'format': ['schedule', 'type', 'mode'],
+        # Type/category-related
+        'type': ['kind', 'category', 'classification'],
+        'category': ['type', 'kind', 'group'],
+        # Naming variations
+        'name': ['title', 'label', 'display_name'],
+        'title': ['name', 'heading', 'label'],
+        'description': ['details', 'text', 'content', 'summary'],
+        # ID variations
+        'id': ['identifier', 'uuid', 'key'],
+        'uuid': ['id', 'identifier', 'guid'],
+        # Status variations
+        'status': ['state', 'condition'],
+        'state': ['status', 'phase'],
+        # User-related
+        'user': ['owner', 'creator', 'author'],
+        'user_id': ['owner_id', 'creator_id', 'author_id'],
     }
 
     # Check if target has known variations
@@ -927,4 +943,146 @@ def validate_structure_tool(
         return json.dumps(results, indent=2)
 
     except Exception as e:
-        return json.dumps({"error": f"Validation failed: {e}"})
+        return json.dumps({"error": f"Structure validation failed: {e}"})
+
+
+@tool
+def validate_code_quality_tool(file_path: str) -> str:
+    """Detect code quality issues and anti-patterns in Python code.
+
+    Checks for:
+    - Bare except clauses (except:, except Exception:)
+    - Exception suppression (except: pass)
+    - Broad exception handling without re-raise
+    - Mocking in production code (not test files)
+    - Empty except blocks
+
+    Args:
+        file_path: Path to the Python file to analyze.
+
+    Returns:
+        JSON string with detected anti-patterns and their locations.
+    """
+    try:
+        path = Path(file_path)
+        if not path.exists():
+            return json.dumps({"error": f"File not found: {file_path}"})
+
+        code = path.read_text()
+        is_test_file = 'test_' in path.name or path.name.startswith('test')
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            return json.dumps({"error": f"Syntax error: {e}"})
+
+        issues = []
+
+        class AntiPatternVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.current_function = None
+
+            def visit_FunctionDef(self, node):
+                old_func = self.current_function
+                self.current_function = node.name
+                self.generic_visit(node)
+                self.current_function = old_func
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Try(self, node):
+                for handler in node.handlers:
+                    # Check for bare except (except:)
+                    if handler.type is None:
+                        issues.append({
+                            "type": "bare_except",
+                            "line": handler.lineno,
+                            "message": "Bare 'except:' clause catches all exceptions including KeyboardInterrupt and SystemExit. Use specific exception types.",
+                            "function": self.current_function,
+                            "severity": "error",
+                        })
+                    # Check for except Exception
+                    elif isinstance(handler.type, ast.Name) and handler.type.id == 'Exception':
+                        # Check if it re-raises
+                        has_raise = any(
+                            isinstance(stmt, ast.Raise)
+                            for stmt in ast.walk(handler)
+                        )
+                        if not has_raise:
+                            issues.append({
+                                "type": "broad_exception_without_reraise",
+                                "line": handler.lineno,
+                                "message": "'except Exception:' without re-raise suppresses all errors. Either handle specific exceptions or re-raise.",
+                                "function": self.current_function,
+                                "severity": "error",
+                            })
+
+                    # Check for exception suppression (except: pass or except Exception: pass)
+                    if len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass):
+                        issues.append({
+                            "type": "exception_suppression",
+                            "line": handler.lineno,
+                            "message": "Exception is silently suppressed with 'pass'. This hides errors and makes debugging difficult.",
+                            "function": self.current_function,
+                            "severity": "error",
+                        })
+
+                    # Check for empty except block (only has ... or pass)
+                    if len(handler.body) == 1 and isinstance(handler.body[0], ast.Expr):
+                        if isinstance(handler.body[0].value, ast.Constant) and handler.body[0].value.value is ...:
+                            issues.append({
+                                "type": "empty_except_block",
+                                "line": handler.lineno,
+                                "message": "Empty except block with '...' suppresses errors.",
+                                "function": self.current_function,
+                                "severity": "warning",
+                            })
+
+                self.generic_visit(node)
+
+            def visit_Call(self, node):
+                # Check for mocking in non-test files
+                if not is_test_file:
+                    func_name = ""
+                    if isinstance(node.func, ast.Name):
+                        func_name = node.func.id
+                    elif isinstance(node.func, ast.Attribute):
+                        func_name = node.func.attr
+
+                    if func_name in ('MagicMock', 'Mock', 'AsyncMock', 'patch'):
+                        issues.append({
+                            "type": "mock_in_production_code",
+                            "line": node.lineno,
+                            "message": f"'{func_name}' found in production code. Mocking should only be used in test files.",
+                            "function": self.current_function,
+                            "severity": "error",
+                        })
+
+                self.generic_visit(node)
+
+        visitor = AntiPatternVisitor()
+        visitor.visit(tree)
+
+        # Categorize issues by severity
+        errors = [i for i in issues if i.get("severity") == "error"]
+        warnings = [i for i in issues if i.get("severity") == "warning"]
+
+        results = {
+            "valid": len(errors) == 0,
+            "file": file_path,
+            "is_test_file": is_test_file,
+            "error_count": len(errors),
+            "warning_count": len(warnings),
+            "issues": issues,
+            "summary": {
+                "bare_except": len([i for i in issues if i["type"] == "bare_except"]),
+                "broad_exception_without_reraise": len([i for i in issues if i["type"] == "broad_exception_without_reraise"]),
+                "exception_suppression": len([i for i in issues if i["type"] == "exception_suppression"]),
+                "mock_in_production_code": len([i for i in issues if i["type"] == "mock_in_production_code"]),
+            }
+        }
+
+        return json.dumps(results, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": f"Code quality validation failed: {e}"})

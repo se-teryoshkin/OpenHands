@@ -12,6 +12,7 @@ from openhands.agenthub.langgraph_reviewer_agent.tools.validators import (
     validate_model_field_mapping_tool,
     validate_test_quality_tool,
     validate_structure_tool,
+    validate_code_quality_tool,
 )
 from openhands.agenthub.langgraph_reviewer_agent.tools.file_tools import (
     read_file_tool,
@@ -40,6 +41,7 @@ ALL_TOOLS = [
     validate_model_field_mapping_tool,
     validate_test_quality_tool,
     validate_structure_tool,
+    validate_code_quality_tool,
     # Reporting
     create_review_comment_tool,
     finalize_review_tool,
@@ -62,6 +64,7 @@ __all__ = [
     "validate_model_field_mapping_tool",
     "validate_test_quality_tool",
     "validate_structure_tool",
+    "validate_code_quality_tool",
     # Reporting
     "create_review_comment_tool",
     "finalize_review_tool",

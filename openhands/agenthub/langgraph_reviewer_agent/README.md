@@ -274,9 +274,9 @@ The agent uses these LangChain tools:
 ```bash
 # Test tools without LLM
 python -m openhands.agenthub.langgraph_reviewer_agent.runner \
-    --spec test_data/module_M4/M4.md \
-    --code test_data/module_M4/M4_v1.1_run3_after_CR_1 \
-    --module VacancyService \
+    --spec path/to/spec.md \
+    --code path/to/generated/code \
+    --module ModuleName \
     --test-tools
 
 # Full integration test

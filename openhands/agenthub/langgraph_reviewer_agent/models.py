@@ -24,6 +24,7 @@ class IssueCategory(str, Enum):
     MISSING_IMPLEMENTATION = "missing_implementation"
     TYPE_ERROR = "type_error"
     PYDANTIC_ISSUE = "pydantic_issue"
+    CODE_QUALITY_ISSUE = "code_quality_issue"  # Bad exception handling, mocks in prod, etc.
     GENERAL = "general"
 
 
