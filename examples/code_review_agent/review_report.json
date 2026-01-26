@@ -5,25 +5,25 @@
     {
       "category": "signature_mismatch",
       "severity": "error",
-      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_q7wlo3mu/src/vacancy_module/service.py",
+      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_9d9p36ao/src/vacancy_module/service.py",
       "line_number": 71,
       "message": "Method `get_vacancy` return type does not match specification. Expected `VacancyResponse` but implementation returns `ExternalVacancyResponse`.",
-      "suggestion": "Update the method signature to return `VacancyResponse` and adjust the implementation to construct and return a `VacancyResponse` instance.",
-      "spec_reference": "M4.md: get_vacancy should return VacancyResponse"
+      "suggestion": "Import the correct `VacancyResponse` model and adjust the return type and conversion logic to produce a `VacancyResponse` instance.",
+      "spec_reference": "Spec M4: get_vacancy should return VacancyResponse"
     },
     {
       "category": "test_quality",
       "severity": "warning",
-      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_q7wlo3mu/src/vacancy_module/test_service.py",
+      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_9d9p36ao/src/vacancy_module/test_service.py",
       "line_number": 12,
-      "message": "Tests only verify the presence of methods using hasattr() and do not invoke any service methods to check behavior.",
-      "suggestion": "Add tests that call create_vacancy, get_vacancy, and list_vacancies with mocked HHClientImplementation to assert correct interactions and returned data.",
-      "spec_reference": "M4.md: tests should verify functionality, not just interface presence"
+      "message": "Tests only verify method existence using `hasattr` and do not invoke any service methods to validate behavior.",
+      "suggestion": "Add tests that call `create_vacancy`, `get_vacancy`, and `list_vacancies` with mocked HHClientImplementation to assert correct interactions and returned data.",
+      "spec_reference": "Tests should verify functional behavior, not just interface presence."
     }
   ],
-  "summary": "The implementation has a return type mismatch for `get_vacancy`, superficial tests, and incomplete field mapping to the required `VacancyResponse` model.",
+  "summary": "Review completed",
   "files_reviewed": [
-    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_q7wlo3mu/src/vacancy_module/test_service.py",
-    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_q7wlo3mu/src/vacancy_module/service.py"
+    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_9d9p36ao/src/vacancy_module/test_service.py",
+    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_9d9p36ao/src/vacancy_module/service.py"
   ]
 }

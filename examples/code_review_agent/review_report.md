@@ -1,7 +1,7 @@
 # Code Review: VacancyService
 **Status:** ❌ FAILED
 
-**Summary:** The implementation has a return type mismatch for `get_vacancy`, superficial tests, and incomplete field mapping to the required `VacancyResponse` model.
+**Summary:** Review completed
 
 **Statistics:**
 - 🔴 Errors: 1
@@ -9,23 +9,23 @@
 - 🔵 Info: 0
 
 **Files Reviewed:**
-- `/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_q7wlo3mu/src/vacancy_module/test_service.py`
-- `/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_q7wlo3mu/src/vacancy_module/service.py`
+- `/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_9d9p36ao/src/vacancy_module/test_service.py`
+- `/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_9d9p36ao/src/vacancy_module/service.py`
 
 ## Issues
 
 ### Signature Mismatch
 
 🔴 **[ERROR]** Method `get_vacancy` return type does not match specification. Expected `VacancyResponse` but implementation returns `ExternalVacancyResponse`.
-   - File: `/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_q7wlo3mu/src/vacancy_module/service.py`
+   - File: `/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_9d9p36ao/src/vacancy_module/service.py`
    - Line: 71
-   - Spec: M4.md: get_vacancy should return VacancyResponse
-   - 💡 Suggestion: Update the method signature to return `VacancyResponse` and adjust the implementation to construct and return a `VacancyResponse` instance.
+   - Spec: Spec M4: get_vacancy should return VacancyResponse
+   - 💡 Suggestion: Import the correct `VacancyResponse` model and adjust the return type and conversion logic to produce a `VacancyResponse` instance.
 
 ### Test Quality
 
-🟡 **[WARNING]** Tests only verify the presence of methods using hasattr() and do not invoke any service methods to check behavior.
-   - File: `/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_q7wlo3mu/src/vacancy_module/test_service.py`
+🟡 **[WARNING]** Tests only verify method existence using `hasattr` and do not invoke any service methods to validate behavior.
+   - File: `/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_9d9p36ao/src/vacancy_module/test_service.py`
    - Line: 12
-   - Spec: M4.md: tests should verify functionality, not just interface presence
-   - 💡 Suggestion: Add tests that call create_vacancy, get_vacancy, and list_vacancies with mocked HHClientImplementation to assert correct interactions and returned data.
+   - Spec: Tests should verify functional behavior, not just interface presence.
+   - 💡 Suggestion: Add tests that call `create_vacancy`, `get_vacancy`, and `list_vacancies` with mocked HHClientImplementation to assert correct interactions and returned data.
