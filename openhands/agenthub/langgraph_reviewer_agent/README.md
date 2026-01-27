@@ -1,9 +1,36 @@
 # LangGraph Code Review Agent
 
-A ReAct-based code review agent built with LangGraph that automatically reviews generated code against specifications.
+A code review agent built with LangGraph that automatically reviews generated code against specifications.
+
+## Two Agent Architectures
+
+### 1. StructuredCodeReviewAgent (Recommended) ⚡
+
+A deterministic workflow agent that is **6x faster** with **better quality**:
+
+| Metric | Structured | ReAct |
+|--------|------------|-------|
+| **Time** | ~15s | ~92s |
+| **Precision** | 45% | 33% |
+| **Recall** | 56% | 50% |
+| **F1 Score** | **50%** | 40% |
+
+**Workflow:**
+1. **Discovery** - Read spec and discover all files (parallel)
+2. **Validation** - Run all validators (parallel)
+3. **Analysis** - Single LLM call to interpret results
+4. **Report** - Generate structured output
+
+### 2. CodeReviewAgent (ReAct)
+
+The original ReAct-based agent with flexible reasoning:
+- Uses LangGraph's `create_react_agent`
+- More exploratory, can adapt to unexpected situations
+- Slower but potentially more thorough
 
 ## Features
 
+- **Two Agent Options**: Choose between fast structured workflow or flexible ReAct
 - **ReAct Pattern**: Uses LangGraph's `create_react_agent` for structured reasoning and action
 - **Specification-based Review**: Validates code against provided specifications
 - **Multiple Validation Types**:
@@ -78,13 +105,31 @@ python -m openhands.agenthub.langgraph_reviewer_agent.runner \
 ### Python API
 
 ```python
+# RECOMMENDED: Use StructuredCodeReviewAgent (6x faster)
+from openhands.agenthub.langgraph_reviewer_agent import ReviewAgentConfig
+from openhands.agenthub.langgraph_reviewer_agent.structured_agent import (
+    StructuredCodeReviewAgent,
+)
+
+config = ReviewAgentConfig()
+agent = StructuredCodeReviewAgent(config, verbose=True)
+
+result = agent.review(
+    spec_path="/path/to/spec.md",
+    code_root="/path/to/code",
+    module_name="MyModule",
+)
+
+print(result.to_markdown())
+
+# Alternative: ReAct agent (more flexible, slower)
 from openhands.agenthub.langgraph_reviewer_agent import (
     CodeReviewAgent,
     ReviewAgentConfig,
     run_review,
 )
 
-# Simple usage
+# Simple usage with ReAct
 result = run_review(
     spec_path="/path/to/spec.md",
     code_root="/path/to/code",
@@ -295,9 +340,47 @@ The agent uses these LangChain tools:
 
 ## Architecture
 
+### StructuredCodeReviewAgent (Recommended)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│               StructuredCodeReviewAgent (6x faster)             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Phase 1: DISCOVERY                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
+│  │  Read Spec  │    │ Find Files  │    │ Read Files  │         │
+│  └─────────────┘    └─────────────┘    └─────────────┘         │
+│         │                  │                  │                 │
+│         └──────────────────┴──────────────────┘                 │
+│                           │                                     │
+│  Phase 2: VALIDATION      ▼                                     │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  Parallel Validators (no LLM calls)                      │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │  │
+│  │  │Signatures│ │ Code     │ │ Test     │ │ Pydantic │    │  │
+│  │  │Validator │ │ Quality  │ │ Quality  │ │ Validator│    │  │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘    │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                           │                                     │
+│  Phase 3: ANALYSIS        ▼                                     │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │        Single LLM Call (Structured Output)               │  │
+│  │        Interpret validation results → Issues             │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                           │                                     │
+│  Phase 4: REPORT          ▼                                     │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              ReviewResult (Pydantic Model)               │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### CodeReviewAgent (ReAct)
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    CodeReviewAgent                          │
+│                    CodeReviewAgent (ReAct)                   │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │

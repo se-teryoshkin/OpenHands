@@ -115,8 +115,14 @@ def run_review(
     data_structures_path: Path | None = None,
     guidelines_path: Path | None = None,
     modules_description_path: Path | None = None,
+    use_structured: bool = False,
 ) -> dict:
-    """Run the code review agent on given code."""
+    """Run the code review agent on given code.
+
+    Args:
+        use_structured: If True, use StructuredCodeReviewAgent (faster).
+                       If False, use ReAct CodeReviewAgent (flexible).
+    """
     start_time = datetime.now()
 
     try:
@@ -130,7 +136,11 @@ def run_review(
         config.max_iterations = max_iterations
         config.verbose = True
 
-        agent = CodeReviewAgent(config)
+        if use_structured:
+            from openhands.agenthub.langgraph_reviewer_agent.structured_agent import StructuredCodeReviewAgent
+            agent = StructuredCodeReviewAgent(config, verbose=True)
+        else:
+            agent = CodeReviewAgent(config)
 
         # Run review with additional context
         result = agent.review(
@@ -187,6 +197,7 @@ def process_code_version(
     data_structures_path: Path | None = None,
     guidelines_path: Path | None = None,
     modules_description_path: Path | None = None,
+    use_structured: bool = False,
 ) -> ReviewRun:
     """Process a single code version and run review."""
     version_path = Path(version_info["path"])
@@ -231,6 +242,7 @@ def process_code_version(
         data_structures_path=data_structures_path,
         guidelines_path=guidelines_path,
         modules_description_path=modules_description_path,
+        use_structured=use_structured,
     )
 
     # Cleanup temp directory
@@ -293,7 +305,8 @@ def run_module_reviews(
     extraction_dir: Path,
     logger: logging.Logger,
     stages_filter: Optional[list] = None,
-    max_iterations: int = 30
+    max_iterations: int = 30,
+    use_structured: bool = False,
 ) -> list[ReviewRun]:
     """Run reviews for all code versions in a module."""
     module_name = module_dir.name
@@ -350,6 +363,7 @@ def run_module_reviews(
             data_structures_path=data_structures_path,
             guidelines_path=guidelines_path,
             modules_description_path=modules_description_path,
+            use_structured=use_structured,
         )
         results.append(run_result)
 
@@ -440,6 +454,11 @@ def main():
         action="store_true",
         help="Enable verbose logging"
     )
+    parser.add_argument(
+        "--structured",
+        action="store_true",
+        help="Use StructuredCodeReviewAgent (faster) instead of ReAct agent"
+    )
     args = parser.parse_args()
 
     logger = setup_logging(args.verbose)
@@ -491,7 +510,8 @@ def main():
             extraction_dir,
             logger,
             stages_filter=args.stages,
-            max_iterations=args.max_iterations
+            max_iterations=args.max_iterations,
+            use_structured=args.structured,
         )
         all_results.extend(results)
 

@@ -92,6 +92,7 @@ def run_review_example(
     data_structures_path: Path | None = None,
     coding_guidelines_path: Path | None = None,
     modules_description_path: Path | None = None,
+    use_structured: bool = False,
 ):
     """Run the code review example.
 
@@ -104,6 +105,7 @@ def run_review_example(
         data_structures_path: Optional path to API data structures file.
         coding_guidelines_path: Optional path to coding guidelines file.
         modules_description_path: Optional path to modules description file.
+        use_structured: If True, use faster StructuredCodeReviewAgent.
     """
     # Check for required environment variables
     api_key = os.getenv("GPT_OSS_KEY")
@@ -126,13 +128,18 @@ def run_review_example(
     print(f"   GPT_OSS_MODEL_NAME: {model_name or 'not set (will use default)'}")
 
     # Import the agent (after checking API key to fail fast)
-    print("🔧 Loading Code Review Agent...")
+    agent_type = "Structured" if use_structured else "ReAct"
+    print(f"🔧 Loading {agent_type} Code Review Agent...")
 
     try:
         from openhands.agenthub.langgraph_reviewer_agent import (
             CodeReviewAgent,
             ReviewAgentConfig,
         )
+        if use_structured:
+            from openhands.agenthub.langgraph_reviewer_agent.structured_agent import (
+                StructuredCodeReviewAgent,
+            )
     except ImportError as e:
         print(f"❌ Import error: {e}")
         print()
@@ -175,10 +182,14 @@ def run_review_example(
         print()
         print(f"🤖 Using model: {config.llm_model_name}")
         print(f"🌐 API endpoint: {config.llm_base_url}")
+        print(f"⚡ Agent type: {agent_type}")
         print()
 
         # Create agent
-        agent = CodeReviewAgent(config, debug=debug)
+        if use_structured:
+            agent = StructuredCodeReviewAgent(config, verbose=debug)
+        else:
+            agent = CodeReviewAgent(config, debug=debug)
 
         # Load additional context documents
         data_structures = None
@@ -307,6 +318,11 @@ def main():
         default=PROJECT_ROOT / "test_data" / "modules_description.md",
         help="Path to modules description file (default: test_data/modules_description.md)",
     )
+    parser.add_argument(
+        "--structured", "-s",
+        action="store_true",
+        help="Use StructuredCodeReviewAgent (6x faster, better F1)",
+    )
 
     args = parser.parse_args()
 
@@ -332,6 +348,7 @@ def main():
         data_structures_path=args.data_structures,
         coding_guidelines_path=args.guidelines,
         modules_description_path=args.modules_description,
+        use_structured=args.structured,
     )
 
     sys.exit(exit_code)

@@ -5,25 +5,34 @@
     {
       "category": "signature_mismatch",
       "severity": "error",
-      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_2mtqxudv/src/vacancy_module/service.py",
-      "line_number": 71,
-      "message": "Method `get_vacancy` return type does not match specification. Expected `VacancyResponse` but implementation returns `ExternalVacancyResponse`.",
-      "suggestion": "Import and use the `VacancyResponse` model defined in the specification, and map all required fields accordingly.",
-      "spec_reference": "M4.md: get_vacancy return type VacancyResponse"
+      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_ls7wv92x/src/vacancy_module/service.py",
+      "line_number": 101,
+      "message": "Return type mismatch in 'get_vacancy': expected 'VacancyResponse' as per specification, but implementation returns 'ExternalVacancyResponse'.",
+      "suggestion": "Update the method signature to return VacancyResponse and adjust the implementation to construct and return a VacancyResponse instance matching the spec.",
+      "spec_reference": "/Users/ngc436/Documents/projects/OpenHands/test_data/module_M4/M4.md"
     },
     {
       "category": "test_quality",
       "severity": "warning",
-      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_2mtqxudv/src/vacancy_module/test_service.py",
-      "line_number": 12,
-      "message": "Tests only verify method existence using `hasattr` and do not invoke any service methods to validate behavior.",
-      "suggestion": "Add tests that call `create_vacancy`, `get_vacancy`, and `list_vacancies` with mocked HHClientImplementation to assert correct interactions and returned data.",
-      "spec_reference": "M4.md: test coverage"
+      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_ls7wv92x/src/vacancy_module/test_service.py",
+      "line_number": null,
+      "message": "Tests only check for method existence using hasattr() and never invoke the service methods, providing superficial coverage.",
+      "suggestion": "Add tests that call create_vacancy, get_vacancy, and list_vacancies on the service instance and verify expected behavior, possibly using mocks for HHClientImplementation.",
+      "spec_reference": "/Users/ngc436/Documents/projects/OpenHands/test_data/module_M4/M4.md"
+    },
+    {
+      "category": "structure_issue",
+      "severity": "info",
+      "file_path": "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_ls7wv92x/src/vacancy_module/test_service.py",
+      "line_number": null,
+      "message": "Test file is located in the source directory instead of a dedicated tests/ directory.",
+      "suggestion": "Move test_service.py to a top-level tests/ directory (e.g., tests/vacancy_module/test_service.py) to follow project conventions.",
+      "spec_reference": null
     }
   ],
-  "summary": "Review completed",
+  "summary": "The implementation mostly follows the specification, but there are critical issues: the `get_vacancy` method returns the wrong type (`ExternalVacancyResponse` instead of the required `VacancyResponse`), and the test suite only checks for method existence without invoking any functionality, providing superficial coverage. Additionally, the test file is placed in the source directory rather than a dedicated tests folder. No code quality, Pydantic usage, or project structure errors were found beyond the misplaced test file.\n\nOverall, the module does not yet pass the review due to the signature mismatch and inadequate tests.",
   "files_reviewed": [
-    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_2mtqxudv/src/vacancy_module/test_service.py",
-    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_2mtqxudv/src/vacancy_module/service.py"
+    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_ls7wv92x/src/vacancy_module/test_service.py",
+    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_ls7wv92x/src/vacancy_module/service.py"
   ]
 }
