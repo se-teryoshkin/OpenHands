@@ -89,6 +89,9 @@ def run_review_example(
     module_name: str,
     debug: bool = False,
     output_file: Path | None = None,
+    data_structures_path: Path | None = None,
+    coding_guidelines_path: Path | None = None,
+    modules_description_path: Path | None = None,
 ):
     """Run the code review example.
 
@@ -98,6 +101,9 @@ def run_review_example(
         module_name: Name of the module.
         debug: Enable debug logging.
         output_file: Optional path to write the report.
+        data_structures_path: Optional path to API data structures file.
+        coding_guidelines_path: Optional path to coding guidelines file.
+        modules_description_path: Optional path to modules description file.
     """
     # Check for required environment variables
     api_key = os.getenv("GPT_OSS_KEY")
@@ -174,6 +180,22 @@ def run_review_example(
         # Create agent
         agent = CodeReviewAgent(config, debug=debug)
 
+        # Load additional context documents
+        data_structures = None
+        coding_guidelines = None
+        modules_description = None
+
+        if data_structures_path and data_structures_path.exists():
+            data_structures = data_structures_path.read_text(encoding='utf-8')
+            print(f"📖 Using data structures: {data_structures_path}")
+        if coding_guidelines_path and coding_guidelines_path.exists():
+            coding_guidelines = coding_guidelines_path.read_text(encoding='utf-8')
+            print(f"📖 Using coding guidelines: {coding_guidelines_path}")
+        if modules_description_path and modules_description_path.exists():
+            modules_description = modules_description_path.read_text(encoding='utf-8')
+            print(f"📖 Using modules description: {modules_description_path}")
+
+        print()
         print("=" * 60)
         print("STARTING REVIEW...")
         print("=" * 60)
@@ -185,6 +207,9 @@ def run_review_example(
                 spec_path=str(spec_path),
                 code_root=str(code_root),
                 module_name=module_name,
+                data_structures=data_structures,
+                coding_guidelines=coding_guidelines,
+                modules_description=modules_description,
             )
         except Exception as e:
             print(f"❌ Review failed: {e}")
@@ -264,6 +289,24 @@ def main():
         default=PROJECT_ROOT / "examples" / "code_review_agent" / "review_report.md",
         help="Output file for the review report",
     )
+    parser.add_argument(
+        "--data-structures",
+        type=Path,
+        default=PROJECT_ROOT / "test_data" / "api_data_structures.md",
+        help="Path to API data structures file (default: test_data/api_data_structures.md)",
+    )
+    parser.add_argument(
+        "--guidelines",
+        type=Path,
+        default=PROJECT_ROOT / "test_data" / "guidelines" / "Agentic Coding Hints React Best Practices.md",
+        help="Path to coding guidelines file",
+    )
+    parser.add_argument(
+        "--modules-description",
+        type=Path,
+        default=PROJECT_ROOT / "test_data" / "modules_description.md",
+        help="Path to modules description file (default: test_data/modules_description.md)",
+    )
 
     args = parser.parse_args()
 
@@ -286,6 +329,9 @@ def main():
         module_name=args.module,
         debug=args.debug,
         output_file=args.output,
+        data_structures_path=args.data_structures,
+        coding_guidelines_path=args.guidelines,
+        modules_description_path=args.modules_description,
     )
 
     sys.exit(exit_code)

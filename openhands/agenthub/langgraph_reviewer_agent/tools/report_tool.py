@@ -61,7 +61,8 @@ def create_review_comment_tool(
         "signature_mismatch", "field_access_error", "mapping_incomplete",
         "field_mapping_error", "test_quality", "structure_issue",
         "missing_implementation", "type_error", "pydantic_issue",
-        "code_quality_issue", "general"
+        "code_quality_issue", "guideline_violation", "scope_violation",
+        "data_structure_mismatch", "general"
     ]
 
     valid_severities = ["error", "warning", "info"]
@@ -87,6 +88,17 @@ def create_review_comment_tool(
 
     if spec_reference:
         comment["spec_reference"] = spec_reference
+
+    # Deduplication: Check if similar comment already exists
+    # Comments are considered duplicates if they have the same message core
+    # (ignoring minor variations) and same file
+    message_core = message.lower().strip()[:100]  # First 100 chars for comparison
+    for existing in _review_comments:
+        existing_core = existing.get("message", "").lower().strip()[:100]
+        if (existing_core == message_core and
+            existing.get("file_path") == file_path and
+            existing.get("category") == category):
+            return f"Duplicate comment skipped: [{severity.upper()}] {message[:50]}... (already recorded)"
 
     _review_comments.append(comment)
     _files_reviewed.append(file_path)

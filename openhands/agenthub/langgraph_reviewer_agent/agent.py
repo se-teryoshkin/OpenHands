@@ -89,14 +89,22 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
    - Use validate_test_quality_tool to assess test coverage
    - Use validate_code_quality_tool to detect anti-patterns (bare except, exception suppression, mocks in prod code)
 
-5. **Check Project Structure**: Use validate_structure_tool to ensure proper organization.
+5. **Check Pydantic and Models**:
+   - Use validate_pydantic_usage_tool to check models inherit from BaseModel
+   - Use validate_api_model_compliance_tool when API data structures are provided to verify model fields match
+   - Flag duplicate model definitions across files
 
-6. **Report Issues**: For each issue found, use create_review_comment_tool with:
+6. **Check Project Structure**:
+   - Use validate_project_structure_tool to check file organization
+   - Look for misplaced files (e.g., SOLUTION_SUMMARY.md in root)
+   - Verify module directory structure
+
+7. **Report Issues**: For each issue found, use create_review_comment_tool with:
    - Appropriate category and severity
    - Clear description of the issue
    - Suggestion for how to fix it
 
-7. **Finalize**: When done, use finalize_review_tool to generate the complete report.
+8. **Finalize**: When done, use finalize_review_tool to generate the complete report.
 
 ## Issue Categories
 
@@ -110,6 +118,9 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
 - `type_error`: Type annotation issues
 - `pydantic_issue`: Issues with Pydantic model usage
 - `code_quality_issue`: Anti-patterns (bare except, exception suppression, mocks in production)
+- `guideline_violation`: Code violates provided coding guidelines
+- `scope_violation`: Module implements functionality outside its defined scope
+- `data_structure_mismatch`: Implementation models don't match API data structure definitions
 - `general`: Other issues
 
 ## Severity Levels
@@ -127,6 +138,35 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
 - Check that all required interface methods are implemented
 - Verify data model field mappings are correct
 
+## Using Additional Context Documents
+
+When provided, use these additional documents for more thorough reviews:
+
+### API Data Structures
+The API data structures document is a SPECIFICATION describing what models SHOULD look like.
+It is documentation, NOT importable code. Models that implement this spec are CORRECT.
+
+If data structure definitions are provided:
+- Use validate_pydantic_usage_tool to check for duplicate models across implementation files
+- Compare implementation model fields with the spec definitions (types, optionality)
+- Check that required fields are properly implemented
+- Flag ONLY if same model is defined in MULTIPLE implementation files (real duplication)
+- Do NOT suggest "importing from API data structures" - the spec is documentation, not code
+
+### Coding Guidelines
+If coding guidelines are provided:
+- Check implementation follows the recommended patterns
+- Flag violations of explicit "do not" rules (e.g., "no manual agent loops")
+- Verify tools/modules are structured as recommended
+- Check naming conventions match the guidelines
+
+### Module Architecture
+If module description is provided:
+- Verify implementation stays within the module's stated scope
+- Flag if the module implements functionality that belongs to another module
+- Check that module dependencies are correct
+- Verify the module doesn't duplicate functionality from other modules
+
 ## CRITICAL Rules for Efficiency
 
 1. **ONLY use the tools listed above** - DO NOT invent tools like "search" or "grep"
@@ -136,13 +176,28 @@ SYSTEM_PROMPT = """You are an expert code review agent. Your task is to review g
 5. **Limit exploration** - read each file only once, use find_python_files_tool to discover files
 6. **Be decisive** - identify issues quickly, report them, and finalize
 
-## REQUIRED Checks (must do ALL of these)
+## REQUIRED Checks (must do ALL of these - DO NOT SKIP ANY)
 
-1. **Signature validation** - Check ALL interface methods match the spec (return types, parameters)
-2. **Field mapping** - Verify ALL required fields from source models are mapped to target models
-3. **Test quality** - Analyze test files and flag if tests are superficial (only hasattr checks) or missing actual assertions
-4. **Code quality** - Run validate_code_quality_tool on ALL Python files to detect anti-patterns
-5. **Report ALL issues found** - Create a review comment for EACH distinct issue before finalizing
+You MUST call each of these tools at least once per review:
+
+1. **validate_signatures_tool** - Check ALL interface methods match the spec
+2. **validate_test_quality_tool** - Analyze test files for superficial tests
+3. **validate_code_quality_tool** - Detect anti-patterns (bare except, mock in prod code)
+4. **validate_pydantic_usage_tool** - Check for duplicate/redefined models
+5. **validate_project_structure_tool** - Check for misplaced files (SOLUTION_SUMMARY.md, etc.)
+
+## CRITICAL: Reporting Issues
+
+After EACH validator tool returns results:
+- Look at the "issues" array in the result
+- For EACH issue in the array, call create_review_comment_tool
+- Do NOT skip any issues - report ALL of them
+- Include issues from ALL categories: pydantic_issue, structure_issue, code_quality_issue, etc.
+
+Example: If validate_project_structure_tool returns {"issues": [{"type": "misplaced_file", ...}]}
+You MUST call create_review_comment_tool for that misplaced_file issue.
+
+IMPORTANT: Run ALL validators, report ALL issues found, then call finalize_review_tool!
 
 ## Field-Level Mapping Validation
 
@@ -301,6 +356,9 @@ class CodeReviewAgent:
         code_root: str,
         module_name: str,
         component_docs: str | None = None,
+        data_structures: str | None = None,
+        coding_guidelines: str | None = None,
+        modules_description: str | None = None,
     ) -> ReviewResult:
         """Run a code review.
 
@@ -310,6 +368,12 @@ class CodeReviewAgent:
             module_name: Name of the module being reviewed.
             component_docs: Optional documentation of external components
                 used in the code (for field validation).
+            data_structures: Optional API data structures documentation
+                (e.g., Pydantic models) for checking implementation matches.
+            coding_guidelines: Optional coding guidelines/best practices
+                that the implementation should follow.
+            modules_description: Optional high-level module architecture
+                description for checking implementation scope.
 
         Returns:
             ReviewResult containing all findings.
@@ -330,17 +394,25 @@ class CodeReviewAgent:
             f"**Specification file:** {spec_path}",
             f"**Code root directory:** {code_root}",
             "",
-            "Steps to follow (YOU MUST COMPLETE ALL STEPS):",
-            "1. Read the specification file to understand requirements",
-            "2. Use find_python_files_tool to discover all Python files",
-            "3. Read service.py AND test_service.py",
-            "4. Use validate_signatures_tool on service code",
-            "5. Use validate_test_quality_tool on test code - flag superficial tests that only use hasattr()",
-            "6. Check field mappings between source and target models",
-            "7. Create a review comment for EACH issue (minimum: check signature, test quality, field mapping)",
-            "8. Call finalize_review_tool when ALL checks are done",
+            "## MANDATORY STEPS (Execute ALL in order):",
             "",
-            "IMPORTANT: Do NOT skip any validation step. Do NOT try to use tools that don't exist.",
+            "### Phase 1: Discovery",
+            "1. Read the specification file",
+            "2. Use find_python_files_tool to discover all Python files",
+            "3. Read source files (service.py, models.py, etc.)",
+            "",
+            "### Phase 2: Validation (CALL ALL VALIDATORS)",
+            "4. CALL validate_signatures_tool - check method signatures",
+            "5. CALL validate_test_quality_tool - check test quality",
+            "6. CALL validate_code_quality_tool - check for anti-patterns",
+            "7. CALL validate_pydantic_usage_tool - check for duplicate models",
+            "8. CALL validate_project_structure_tool - check file organization",
+            "",
+            "### Phase 3: Reporting",
+            "9. For EACH issue found by validators → create_review_comment_tool",
+            "10. CALL finalize_review_tool to complete review",
+            "",
+            "⚠️ WARNING: Skipping ANY validator step makes the review incomplete!",
         ]
 
         if component_docs:
@@ -349,6 +421,35 @@ class CodeReviewAgent:
                 "**Component Documentation:**",
                 "Use this to validate field accesses on external objects:",
                 component_docs,
+            ])
+
+        if data_structures:
+            request_parts.extend([
+                "",
+                "**API Data Structures Specification:**",
+                "This is a SPECIFICATION document describing how models SHOULD look.",
+                "It is documentation, NOT importable code. Models implementing this spec are CORRECT.",
+                "Use validate_pydantic_usage_tool to check for duplicate models across implementation files.",
+                "Do NOT suggest importing from this spec - implementations are correct.",
+                "Specification:",
+                data_structures[:4000],  # Truncate if too long
+            ])
+
+        if coding_guidelines:
+            request_parts.extend([
+                "",
+                "**Coding Guidelines:**",
+                "Check that implementation follows these guidelines:",
+                coding_guidelines[:3000],  # Truncate if too long
+            ])
+
+        if modules_description:
+            request_parts.extend([
+                "",
+                "**Module Architecture Description:**",
+                "Verify implementation scope matches the module's purpose.",
+                "Check that module doesn't implement functionality outside its scope:",
+                modules_description[:2000],  # Truncate if too long
             ])
 
         request = "\n".join(request_parts)

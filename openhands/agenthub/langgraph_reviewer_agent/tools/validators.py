@@ -1086,3 +1086,462 @@ def validate_code_quality_tool(file_path: str) -> str:
 
     except Exception as e:
         return json.dumps({"error": f"Code quality validation failed: {e}"})
+
+
+@tool
+def validate_pydantic_usage_tool(code_root: str, api_data_structures: str = "") -> str:
+    """Validate proper Pydantic usage in the codebase.
+
+    Checks for:
+    - Models that should inherit from BaseModel but don't
+    - Duplicate model definitions across files in the SAME codebase
+
+    NOTE: api_data_structures is a SPECIFICATION document describing what models
+    should look like. Models implementing this spec are CORRECT, not duplicates.
+    This tool only flags when the SAME model is defined in MULTIPLE implementation files.
+
+    Args:
+        code_root: Root directory of the code to analyze.
+        api_data_structures: Optional API spec (for reference, not for import checking).
+
+    Returns:
+        JSON string with validation results.
+    """
+    try:
+        root = Path(code_root)
+        if not root.exists():
+            return json.dumps({"error": f"Directory not found: {code_root}"})
+
+        issues = []
+        model_definitions = {}  # model_name -> list of file paths
+        models_in_api = set()
+
+        # Extract model names from API data structures (for reference only)
+        if api_data_structures:
+            class_pattern = r'class\s+(\w+)\s*\([^)]*BaseModel[^)]*\)'
+            for match in re.finditer(class_pattern, api_data_structures):
+                models_in_api.add(match.group(1))
+
+        # Analyze all Python files
+        for py_file in root.rglob("*.py"):
+            if "__pycache__" in str(py_file):
+                continue
+
+            try:
+                code = py_file.read_text(encoding='utf-8')
+                tree = ast.parse(code)
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+
+            relative_path = str(py_file.relative_to(root))
+            is_models_file = "models" in py_file.name.lower()
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    class_name = node.name
+
+                    # Check if class should be a Pydantic model
+                    is_pydantic = False
+                    base_classes = []
+                    for base in node.bases:
+                        if isinstance(base, ast.Name):
+                            base_classes.append(base.id)
+                            if base.id in ('BaseModel', 'BaseSettings'):
+                                is_pydantic = True
+                        elif isinstance(base, ast.Attribute):
+                            base_classes.append(base.attr)
+                            if base.attr in ('BaseModel', 'BaseSettings'):
+                                is_pydantic = True
+
+                    # Only track Pydantic models for duplicate detection
+                    if is_pydantic:
+                        if class_name not in model_definitions:
+                            model_definitions[class_name] = []
+                        model_definitions[class_name].append({
+                            "file": relative_path,
+                            "line": node.lineno,
+                        })
+
+                    # Check if this looks like a data model that should use Pydantic
+                    looks_like_data_model = (
+                        is_models_file or
+                        class_name.endswith(('Response', 'Request', 'Model', 'Schema', 'View', 'Info')) or
+                        class_name in models_in_api
+                    )
+
+                    # Check if class uses dataclass decorator
+                    is_dataclass = any(
+                        isinstance(d, ast.Name) and d.id == 'dataclass'
+                        or isinstance(d, ast.Call) and isinstance(d.func, ast.Name) and d.func.id == 'dataclass'
+                        for d in node.decorator_list
+                    )
+
+                    if looks_like_data_model and not is_pydantic and not is_dataclass:
+                        # Check if it's a simple class with typed attributes
+                        has_typed_attrs = any(
+                            isinstance(item, ast.AnnAssign) for item in node.body
+                        )
+                        if has_typed_attrs:
+                            issues.append({
+                                "type": "missing_pydantic",
+                                "file": relative_path,
+                                "line": node.lineno,
+                                "class_name": class_name,
+                                "message": f"Class '{class_name}' looks like a data model but doesn't inherit from BaseModel. Consider using Pydantic.",
+                                "severity": "warning",
+                            })
+
+                    # NOTE: We do NOT flag models that match the API spec as "redefinitions"
+                    # The API spec is documentation, not importable code. Implementation is correct.
+
+        # Check for duplicate model definitions
+        for model_name, locations in model_definitions.items():
+            if len(locations) > 1:
+                # Filter to only show duplicates of data model-like classes
+                if (model_name.endswith(('Response', 'Request', 'Model', 'Schema', 'View', 'Info'))
+                    or model_name in models_in_api):
+                    files = [loc["file"] for loc in locations]
+                    issues.append({
+                        "type": "duplicate_model",
+                        "model_name": model_name,
+                        "locations": locations,
+                        "message": f"Model '{model_name}' is defined in multiple files: {', '.join(files)}. Consider using a shared definition.",
+                        "severity": "error",
+                    })
+
+        errors = [i for i in issues if i.get("severity") == "error"]
+        warnings = [i for i in issues if i.get("severity") == "warning"]
+
+        results = {
+            "valid": len(errors) == 0,
+            "code_root": code_root,
+            "error_count": len(errors),
+            "warning_count": len(warnings),
+            "issues": issues,
+            "models_in_api": list(models_in_api),
+            "summary": {
+                "missing_pydantic": len([i for i in issues if i["type"] == "missing_pydantic"]),
+                "model_redefinition": len([i for i in issues if i["type"] == "model_redefinition"]),
+                "duplicate_model": len([i for i in issues if i["type"] == "duplicate_model"]),
+            }
+        }
+
+        return json.dumps(results, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": f"Pydantic validation failed: {e}"})
+
+
+@tool
+def validate_project_structure_tool(
+    code_root: str,
+    module_name: str,
+    recommended_structure: str = ""
+) -> str:
+    """Validate project structure and file organization.
+
+    Checks for:
+    - Files in wrong locations (e.g., SOLUTION_SUMMARY.md in project root)
+    - Missing recommended directories (src/, tests/)
+    - Incorrect module organization
+
+    Args:
+        code_root: Root directory of the project.
+        module_name: Name of the module being reviewed.
+        recommended_structure: Optional text describing recommended structure.
+
+    Returns:
+        JSON string with validation results.
+    """
+    try:
+        root = Path(code_root)
+        if not root.exists():
+            return json.dumps({"error": f"Directory not found: {code_root}"})
+
+        issues = []
+        structure_info = {
+            "has_src": False,
+            "has_tests": False,
+            "has_pyproject": False,
+            "has_readme": False,
+            "files_in_root": [],
+            "module_dirs": [],
+        }
+
+        # Check root level files
+        for item in root.iterdir():
+            if item.is_file():
+                structure_info["files_in_root"].append(item.name)
+
+                # Check for files that shouldn't be in root
+                if item.name == "SOLUTION_SUMMARY.md":
+                    issues.append({
+                        "type": "misplaced_file",
+                        "file": item.name,
+                        "message": "SOLUTION_SUMMARY.md should not be in the project root. Move it to the module directory or docs folder.",
+                        "severity": "warning",
+                    })
+                elif item.name.endswith('.py') and item.name not in ('__init__.py', 'conftest.py', 'setup.py'):
+                    issues.append({
+                        "type": "misplaced_file",
+                        "file": item.name,
+                        "message": f"Python file '{item.name}' found in project root. Should be in src/ or a module directory.",
+                        "severity": "warning",
+                    })
+
+            elif item.is_dir():
+                if item.name == "src":
+                    structure_info["has_src"] = True
+                elif item.name in ("tests", "test"):
+                    structure_info["has_tests"] = True
+                elif item.name.endswith("_module") or item.name == module_name.lower().replace("service", "_module"):
+                    structure_info["module_dirs"].append(item.name)
+
+        # Check for pyproject.toml or setup.py
+        if (root / "pyproject.toml").exists():
+            structure_info["has_pyproject"] = True
+        if (root / "setup.py").exists():
+            structure_info["has_pyproject"] = True
+
+        # Check for README
+        if (root / "README.md").exists() or (root / "readme.md").exists():
+            structure_info["has_readme"] = True
+
+        # Check src/ directory structure if it exists
+        src_dir = root / "src"
+        if src_dir.exists():
+            for item in src_dir.iterdir():
+                if item.is_dir() and not item.name.startswith('_'):
+                    structure_info["module_dirs"].append(f"src/{item.name}")
+
+                    # Check module has __init__.py
+                    if not (item / "__init__.py").exists():
+                        issues.append({
+                            "type": "missing_init",
+                            "directory": f"src/{item.name}",
+                            "message": f"Module directory 'src/{item.name}' is missing __init__.py.",
+                            "severity": "warning",
+                        })
+
+                    # Check for test files in source directory (should be in tests/)
+                    for py_file in item.glob("test_*.py"):
+                        issues.append({
+                            "type": "misplaced_test",
+                            "file": f"src/{item.name}/{py_file.name}",
+                            "message": f"Test file '{py_file.name}' found in source directory. Consider moving to tests/ directory.",
+                            "severity": "info",
+                        })
+
+        # Check for common structure issues
+        if not structure_info["has_src"] and not structure_info["module_dirs"]:
+            issues.append({
+                "type": "missing_structure",
+                "message": "No src/ directory or module directories found. Recommended structure: project/src/module_name/",
+                "severity": "warning",
+            })
+
+        # Parse recommended structure if provided
+        if recommended_structure:
+            # Check if the structure matches recommendations
+            if "src/" in recommended_structure and not structure_info["has_src"]:
+                issues.append({
+                    "type": "structure_mismatch",
+                    "message": "Recommended structure includes src/ directory but it's missing.",
+                    "severity": "warning",
+                })
+
+            if "tests/" in recommended_structure and not structure_info["has_tests"]:
+                issues.append({
+                    "type": "structure_mismatch",
+                    "message": "Recommended structure includes tests/ directory but it's missing.",
+                    "severity": "info",
+                })
+
+        errors = [i for i in issues if i.get("severity") == "error"]
+        warnings = [i for i in issues if i.get("severity") == "warning"]
+
+        results = {
+            "valid": len(errors) == 0,
+            "code_root": code_root,
+            "structure": structure_info,
+            "error_count": len(errors),
+            "warning_count": len(warnings),
+            "issues": issues,
+        }
+
+        return json.dumps(results, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": f"Structure validation failed: {e}"})
+
+
+@tool
+def validate_api_model_compliance_tool(
+    impl_file: str,
+    api_data_structures: str
+) -> str:
+    """Validate that implementation models comply with API data structure definitions.
+
+    Compares implementation model fields with API-defined Pydantic models to ensure:
+    - All required fields are present
+    - Field types match
+    - Optional fields are correctly marked
+
+    Args:
+        impl_file: Path to the implementation file with models.
+        api_data_structures: API data structure definitions (Pydantic models as text).
+
+    Returns:
+        JSON string with compliance results.
+    """
+    try:
+        impl_path = Path(impl_file)
+        if not impl_path.exists():
+            return json.dumps({"error": f"File not found: {impl_file}"})
+
+        impl_code = impl_path.read_text(encoding='utf-8')
+        issues = []
+
+        # Parse API data structures to extract model definitions
+        api_models = {}
+        class_pattern = r'class\s+(\w+)\s*\([^)]*BaseModel[^)]*\):\s*(?:"""[^"]*"""\s*)?((?:[^}]+?)?)(?=\nclass|\n#|$)'
+
+        for match in re.finditer(class_pattern, api_data_structures, re.DOTALL):
+            model_name = match.group(1)
+            body = match.group(2)
+
+            fields = {}
+            # Parse field definitions
+            field_pattern = r'(\w+):\s*(Optional\[)?([^=\n]+?)\]?\s*=\s*Field\(([^)]+)\)'
+            for field_match in re.finditer(field_pattern, body):
+                field_name = field_match.group(1)
+                is_optional = field_match.group(2) is not None
+                field_type = field_match.group(3).strip()
+                field_args = field_match.group(4)
+
+                # Check if field is required (... as default)
+                is_required = '...' in field_args and 'default=' not in field_args
+
+                fields[field_name] = {
+                    "type": field_type,
+                    "optional": is_optional,
+                    "required": is_required and not is_optional,
+                }
+
+            # Also check simple type annotations
+            simple_field_pattern = r'(\w+):\s*(Optional\[)?([^\n=]+?)\]?\s*(?:=\s*([^\n]+))?$'
+            for field_match in re.finditer(simple_field_pattern, body, re.MULTILINE):
+                field_name = field_match.group(1)
+                if field_name not in fields and field_name not in ('model_config',):
+                    is_optional = field_match.group(2) is not None
+                    field_type = field_match.group(3).strip()
+                    default = field_match.group(4)
+
+                    fields[field_name] = {
+                        "type": field_type,
+                        "optional": is_optional or default is not None,
+                        "required": not is_optional and default is None,
+                    }
+
+            api_models[model_name] = fields
+
+        # Parse implementation to find model definitions
+        try:
+            impl_tree = ast.parse(impl_code)
+        except SyntaxError as e:
+            return json.dumps({"error": f"Syntax error in implementation: {e}"})
+
+        impl_models = {}
+        for node in ast.walk(impl_tree):
+            if isinstance(node, ast.ClassDef):
+                # Check if it inherits from BaseModel
+                is_pydantic = any(
+                    (isinstance(base, ast.Name) and base.id == 'BaseModel')
+                    or (isinstance(base, ast.Attribute) and base.attr == 'BaseModel')
+                    for base in node.bases
+                )
+
+                if is_pydantic or node.name in api_models:
+                    fields = {}
+                    for item in node.body:
+                        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                            field_name = item.target.id
+                            type_hint = ast.unparse(item.annotation) if hasattr(ast, 'unparse') else str(item.annotation)
+                            has_default = item.value is not None
+                            is_optional = 'Optional' in type_hint or 'None' in type_hint
+
+                            fields[field_name] = {
+                                "type": type_hint,
+                                "optional": is_optional,
+                                "has_default": has_default,
+                            }
+
+                    impl_models[node.name] = {
+                        "fields": fields,
+                        "line": node.lineno,
+                    }
+
+        # Compare implementation with API definitions
+        for model_name, api_fields in api_models.items():
+            if model_name in impl_models:
+                impl_info = impl_models[model_name]
+                impl_fields = impl_info["fields"]
+
+                # Check for missing required fields
+                for field_name, field_info in api_fields.items():
+                    if field_info["required"] and field_name not in impl_fields:
+                        issues.append({
+                            "type": "missing_required_field",
+                            "model": model_name,
+                            "field": field_name,
+                            "line": impl_info["line"],
+                            "message": f"Model '{model_name}' is missing required field '{field_name}' (type: {field_info['type']}).",
+                            "severity": "error",
+                        })
+                    elif field_name not in impl_fields and not field_info["optional"]:
+                        issues.append({
+                            "type": "missing_field",
+                            "model": model_name,
+                            "field": field_name,
+                            "line": impl_info["line"],
+                            "message": f"Model '{model_name}' is missing field '{field_name}'.",
+                            "severity": "warning",
+                        })
+
+                # Check for type mismatches (simplified comparison)
+                for field_name, impl_field_info in impl_fields.items():
+                    if field_name in api_fields:
+                        api_type = api_fields[field_name]["type"]
+                        impl_type = impl_field_info["type"]
+                        # Simple check - see if core type is present
+                        api_core = re.sub(r'Optional\[|\]|List\[', '', api_type)
+                        impl_core = re.sub(r'Optional\[|\]|List\[', '', impl_type)
+                        if api_core != impl_core and api_core.lower() != impl_core.lower():
+                            issues.append({
+                                "type": "type_mismatch",
+                                "model": model_name,
+                                "field": field_name,
+                                "expected": api_type,
+                                "actual": impl_type,
+                                "line": impl_info["line"],
+                                "message": f"Field '{field_name}' in '{model_name}' has type '{impl_type}' but API expects '{api_type}'.",
+                                "severity": "warning",
+                            })
+
+        errors = [i for i in issues if i.get("severity") == "error"]
+        warnings = [i for i in issues if i.get("severity") == "warning"]
+
+        results = {
+            "valid": len(errors) == 0,
+            "file": impl_file,
+            "api_models_checked": list(api_models.keys()),
+            "impl_models_found": list(impl_models.keys()),
+            "error_count": len(errors),
+            "warning_count": len(warnings),
+            "issues": issues,
+        }
+
+        return json.dumps(results, indent=2)
+
+    except Exception as e:
+        return json.dumps({"error": f"API model compliance validation failed: {e}"})

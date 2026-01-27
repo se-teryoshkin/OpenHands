@@ -25,6 +25,9 @@ class IssueCategory(str, Enum):
     TYPE_ERROR = "type_error"
     PYDANTIC_ISSUE = "pydantic_issue"
     CODE_QUALITY_ISSUE = "code_quality_issue"  # Bad exception handling, mocks in prod, etc.
+    GUIDELINE_VIOLATION = "guideline_violation"  # Violates coding guidelines
+    SCOPE_VIOLATION = "scope_violation"  # Module implements out-of-scope functionality
+    DATA_STRUCTURE_MISMATCH = "data_structure_mismatch"  # Model doesn't match API definition
     GENERAL = "general"
 
 

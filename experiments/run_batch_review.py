@@ -96,17 +96,35 @@ def find_python_source_dir(extracted_dir: Path) -> Optional[Path]:
     return None
 
 
+def load_context_file(file_path: Path | None) -> str | None:
+    """Load content from a context file if it exists."""
+    if file_path and file_path.exists():
+        try:
+            return file_path.read_text(encoding='utf-8')
+        except Exception:
+            return None
+    return None
+
+
 def run_review(
     code_path: Path,
     spec_path: Path,
     module_name: str,
     logger: logging.Logger,
-    max_iterations: int = 30
+    max_iterations: int = 30,
+    data_structures_path: Path | None = None,
+    guidelines_path: Path | None = None,
+    modules_description_path: Path | None = None,
 ) -> dict:
     """Run the code review agent on given code."""
     start_time = datetime.now()
 
     try:
+        # Load additional context documents
+        data_structures = load_context_file(data_structures_path)
+        coding_guidelines = load_context_file(guidelines_path)
+        modules_description = load_context_file(modules_description_path)
+
         # Initialize agent with config
         config = ReviewAgentConfig.from_env()
         config.max_iterations = max_iterations
@@ -114,11 +132,14 @@ def run_review(
 
         agent = CodeReviewAgent(config)
 
-        # Run review with correct signature
+        # Run review with additional context
         result = agent.review(
             spec_path=str(spec_path),
             code_root=str(code_path),
-            module_name=module_name
+            module_name=module_name,
+            data_structures=data_structures,
+            coding_guidelines=coding_guidelines,
+            modules_description=modules_description,
         )
 
         duration = (datetime.now() - start_time).total_seconds()
@@ -162,7 +183,10 @@ def process_code_version(
     spec_path: Path,
     module_name: str,
     logger: logging.Logger,
-    max_iterations: int = 30
+    max_iterations: int = 30,
+    data_structures_path: Path | None = None,
+    guidelines_path: Path | None = None,
+    modules_description_path: Path | None = None,
 ) -> ReviewRun:
     """Process a single code version and run review."""
     version_path = Path(version_info["path"])
@@ -201,8 +225,13 @@ def process_code_version(
 
     logger.info(f"Source directory: {code_dir}")
 
-    # Run review
-    result = run_review(code_dir, spec_path, module_name, logger, max_iterations)
+    # Run review with additional context
+    result = run_review(
+        code_dir, spec_path, module_name, logger, max_iterations,
+        data_structures_path=data_structures_path,
+        guidelines_path=guidelines_path,
+        modules_description_path=modules_description_path,
+    )
 
     # Cleanup temp directory
     if cleanup_needed and temp_dir:
@@ -232,6 +261,32 @@ def load_extraction_data(extraction_dir: Path, module_name: str) -> Optional[dic
     return None
 
 
+def find_context_documents(test_data_dir: Path) -> tuple[Path | None, Path | None, Path | None]:
+    """Find additional context documents in test_data folder."""
+    data_structures_path = None
+    guidelines_path = None
+    modules_description_path = None
+
+    # Look for api_data_structures.md
+    ds_path = test_data_dir / "api_data_structures.md"
+    if ds_path.exists():
+        data_structures_path = ds_path
+
+    # Look for guidelines (take first .md in guidelines folder)
+    guidelines_dir = test_data_dir / "guidelines"
+    if guidelines_dir.exists():
+        guideline_files = list(guidelines_dir.glob("*.md"))
+        if guideline_files:
+            guidelines_path = guideline_files[0]
+
+    # Look for modules_description.md
+    mod_path = test_data_dir / "modules_description.md"
+    if mod_path.exists():
+        modules_description_path = mod_path
+
+    return data_structures_path, guidelines_path, modules_description_path
+
+
 def run_module_reviews(
     module_dir: Path,
     output_dir: Path,
@@ -249,6 +304,17 @@ def run_module_reviews(
         logger.warning(f"No spec file found for {module_name}")
         return []
     spec_path = spec_files[0]
+
+    # Find additional context documents in test_data folder
+    test_data_dir = module_dir.parent
+    data_structures_path, guidelines_path, modules_description_path = find_context_documents(test_data_dir)
+
+    if data_structures_path:
+        logger.info(f"Using data structures: {data_structures_path}")
+    if guidelines_path:
+        logger.info(f"Using guidelines: {guidelines_path}")
+    if modules_description_path:
+        logger.info(f"Using modules description: {modules_description_path}")
 
     # Load extraction data to get code versions
     extraction_data = load_extraction_data(extraction_dir, module_name)
@@ -280,7 +346,10 @@ def run_module_reviews(
         logger.info(f"{'='*60}")
 
         run_result = process_code_version(
-            version, spec_path, module_name, logger, max_iterations
+            version, spec_path, module_name, logger, max_iterations,
+            data_structures_path=data_structures_path,
+            guidelines_path=guidelines_path,
+            modules_description_path=modules_description_path,
         )
         results.append(run_result)
 

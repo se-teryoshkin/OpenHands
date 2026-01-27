@@ -151,6 +151,53 @@ print(f"Total reviews: {summary['total_reviews']}")
 print(f"Passed: {summary['passed']}")
 ```
 
+### Using Additional Context Documents
+
+The agent can leverage additional documentation for more thorough reviews:
+
+```python
+from pathlib import Path
+from openhands.agenthub.langgraph_reviewer_agent import (
+    CodeReviewAgent,
+    ReviewAgentConfig,
+)
+
+agent = CodeReviewAgent()
+
+# Load context documents
+data_structures = Path("test_data/api_data_structures.md").read_text()
+guidelines = Path("test_data/guidelines/coding_guidelines.md").read_text()
+modules_desc = Path("test_data/modules_description.md").read_text()
+
+# Run review with additional context
+result = agent.review(
+    spec_path="/path/to/spec.md",
+    code_root="/path/to/code",
+    module_name="MyModule",
+    # Optional context documents
+    data_structures=data_structures,        # API Pydantic model definitions
+    coding_guidelines=guidelines,            # Coding best practices/rules
+    modules_description=modules_desc,        # High-level module architecture
+)
+```
+
+**Context Document Types:**
+
+1. **API Data Structures** (`data_structures`):
+   - Pydantic model definitions for API request/response schemas
+   - Agent validates implementation models match these definitions
+   - Checks field types, optionality, and naming
+
+2. **Coding Guidelines** (`coding_guidelines`):
+   - Best practices and coding standards
+   - Agent checks for guideline violations
+   - Examples: "no manual agent loops", "tools must be real"
+
+3. **Module Architecture** (`modules_description`):
+   - High-level description of module responsibilities
+   - Agent validates implementation scope matches description
+   - Flags out-of-scope functionality
+
 ## Available Tools
 
 The agent uses these LangChain tools:
@@ -169,7 +216,9 @@ The agent uses these LangChain tools:
 - `validate_signatures_tool`: Check signature compliance with spec
 - `validate_field_access_tool`: Verify field accesses are valid
 - `validate_mapping_tool`: Check data model mappings
-- `validate_test_quality_tool`: Assess test coverage and quality
+- `validate_model_field_mapping_tool`: Detailed field-level mapping validation
+- `validate_test_quality_tool`: Assess test coverage and quality (detects superficial tests)
+- `validate_code_quality_tool`: Detect anti-patterns (bare except, exception suppression, mocks in prod)
 - `validate_structure_tool`: Verify project organization
 
 ### Reporting
@@ -181,10 +230,16 @@ The agent uses these LangChain tools:
 - `signature_mismatch`: Method signatures don't match specification
 - `field_access_error`: Accessing non-existent fields on objects
 - `mapping_incomplete`: Missing required field mappings
-- `test_quality`: Test coverage or quality issues
+- `field_mapping_error`: Field-level mapping issues (missing required fields in data transformations)
+- `test_quality`: Test coverage or quality issues (superficial tests using only `hasattr()`)
 - `structure_issue`: File organization problems
 - `missing_implementation`: Required features not implemented
 - `type_error`: Type annotation issues
+- `pydantic_issue`: Issues with Pydantic model usage
+- `code_quality_issue`: Anti-patterns (bare except, exception suppression, mocks in production)
+- `guideline_violation`: Code violates provided coding guidelines
+- `scope_violation`: Module implements functionality outside its defined scope
+- `data_structure_mismatch`: Implementation models don't match API data structure definitions
 - `general`: Other issues
 
 ## Output Format
