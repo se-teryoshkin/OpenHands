@@ -56,6 +56,16 @@ class LLMReviewOutput(BaseModel):
     passed: bool = Field(description="Whether the code passes review (no errors)")
 
 
+class ExtractedIssue(BaseModel):
+    """Issue extracted deterministically from validator output."""
+    category: str
+    file_path: str
+    line_number: int | None
+    message: str
+    validator_name: str
+    validator_issue: dict[str, Any]  # Original validator issue for context
+
+
 class StructuredCodeReviewAgent:
     """Structured Workflow Code Review Agent.
 
@@ -306,7 +316,7 @@ class StructuredCodeReviewAgent:
         self,
         spec_content: str,
         file_contents: dict[str, str],
-        validation_results: dict[str, Any],
+        extracted_issues: list[ExtractedIssue],
         coding_guidelines: str = "",
         modules_description: str = "",
     ) -> str:
@@ -319,25 +329,16 @@ class StructuredCodeReviewAgent:
                 content = content[:3000] + "\n... (truncated)"
             files_summary.append(f"### {Path(path).name}\n```python\n{content}\n```")
 
-        # Prepare validation results summary
-        validation_summary = []
-        for name, result in validation_results.items():
-            if isinstance(result, dict):
-                issues = result.get("issues", [])
-                valid = result.get("valid", True)
-                error = result.get("error")
+        # Prepare extracted issues list for LLM
+        issues_list = []
+        for i, issue in enumerate(extracted_issues, 1):
+            line_str = f", Line: {issue.line_number}" if issue.line_number else ""
+            issues_list.append(
+                f"{i}. Category: {issue.category}, File: {issue.file_path}{line_str}, "
+                f"Message: {issue.message[:150]}"
+            )
 
-                if error:
-                    validation_summary.append(f"**{name}**: Error - {error}")
-                elif issues:
-                    validation_summary.append(f"**{name}**: {len(issues)} issues found")
-                    for issue in issues[:5]:  # Limit to 5 issues per validator
-                        msg = issue.get("message", str(issue))[:200]
-                        validation_summary.append(f"  - {msg}")
-                else:
-                    validation_summary.append(f"**{name}**: ✓ No issues")
-
-        prompt = f"""You are a code review expert. Analyze the following code review results and provide a structured assessment.
+        prompt = f"""You are a code review expert. Your task is to assign severity levels and generate suggestions for the issues found by validators.
 
 ## Specification
 ```
@@ -347,8 +348,11 @@ class StructuredCodeReviewAgent:
 ## Source Files
 {chr(10).join(files_summary[:5])}
 
-## Validation Results
-{chr(10).join(validation_summary)}
+## Issues Found by Validators (ALREADY EXTRACTED)
+
+The following issues were found deterministically by validators. You MUST process ALL of them:
+
+{chr(10).join(issues_list)}
 
 """
 
@@ -367,39 +371,58 @@ class StructuredCodeReviewAgent:
         prompt += """
 ## Your Task
 
-**STRICTLY analyze only the validation results above.** Do NOT invent new issues.
+**IMPORTANT: The issues above are ALREADY EXTRACTED. You MUST process ALL of them.**
 
-For each issue ALREADY found by validators, convert it to this format:
-1. **category**: One of: signature_mismatch, test_quality, code_quality_issue, pydantic_issue, structure_issue, cross_file_issue, general
-2. **severity**: error (must fix), warning (should fix), info (suggestion)
-3. **file_path**: The file where the issue is located (from validator output)
-4. **line_number**: Line number if reported by validator (null if not)
-5. **message**: The issue message from the validator
-6. **suggestion**: How to fix it
+For EACH issue listed above, you need to:
+1. **Keep the same category, file_path, line_number, and message** (already provided)
+2. **Assign severity**: error (must fix), warning (should fix), info (suggestion)
+3. **Generate suggestion**: How to fix the issue
 
-**CATEGORY MAPPING RULES:**
-- Issues from `cross_file_usage` validator → use category `cross_file_issue`
-- Issues from `validate_signatures_tool` → use category `signature_mismatch`
-- Issues from `validate_test_quality_tool` → use category `test_quality`
-- Issues from `validate_code_quality_tool` → use category `code_quality_issue`
-- Issues from `validate_pydantic_usage_tool` → use category `pydantic_issue`
-- Issues from `validate_project_structure_tool` → use category `structure_issue`
-- All other validator issues → use category `general`
+**Severity Assignment Rules:**
+- **error**: Critical issues that must be fixed
+  - Missing required methods (signature_mismatch)
+  - Code that will cause runtime failures
+  - Critical security or correctness issues
+- **warning**: Issues that should be addressed
+  - Code quality issues (broad exception handling)
+  - Test quality issues (superficial tests)
+  - Potential bugs or suboptimal patterns
+- **info**: Suggestions for improvement
+  - Style improvements
+  - Documentation suggestions
+  - Minor optimizations
 
 **CRITICAL RULES:**
-- ONLY report issues that were found by the validators above
-- Do NOT add issues like "NotImplementedError" unless a validator flagged it
-- Do NOT add structure issues unless validate_project_structure found them
-- Do NOT suggest "importing from API data structures" - they are specifications
-- IGNORE issues about missing src/ directory if files are properly organized
-- Be CONSERVATIVE - when in doubt, don't report
-- Aim for HIGH PRECISION (fewer false positives)
+- Process ALL issues listed above (same number of issues in output as input)
+- Keep category, file_path, line_number, and message EXACTLY as provided
+- Only assign severity and generate suggestion
+- Do NOT skip, merge, or filter issues
+- Do NOT add new issues not in the list above
 
-Expected output: 3-8 issues maximum. If validators found no issues, report empty list.
+**Output Format:**
+For each issue, output:
+{
+  "category": "<same as input>",
+  "file_path": "<same as input>",
+  "line_number": <same as input or null>,
+  "message": "<same as input>",
+  "severity": "error|warning|info",
+  "suggestion": "<your suggestion for how to fix it>"
+}
 
 Respond with JSON:
 {
-  "issues": [...],
+  "issues": [
+    {
+      "category": "...",
+      "file_path": "...",
+      "line_number": ...,
+      "message": "...",
+      "severity": "error|warning|info",
+      "suggestion": "..."
+    },
+    ...
+  ],
   "summary": "Brief summary (1-2 sentences)",
   "passed": true/false (false only if ERROR severity issues exist)
 }
@@ -407,8 +430,131 @@ Respond with JSON:
 
         return prompt
 
-    def _parse_llm_response(self, response: str) -> LLMReviewOutput:
-        """Parse the LLM response into structured output."""
+    def _extract_issues_deterministically(
+        self,
+        validation_results: dict[str, Any],
+    ) -> list[ExtractedIssue]:
+        """Extract all issues from validators deterministically.
+
+        This phase extracts issues without LLM involvement, ensuring 100% consistency.
+        Returns list of ExtractedIssue objects with category, file_path, line_number, message.
+        """
+        extracted_issues = []
+
+        # Category mapping rules (deterministic)
+        category_map = {
+            "cross_file_usage": "cross_file_issue",
+            "signatures_": "signature_mismatch",
+            "test_quality_": "test_quality",
+            "code_quality_": "code_quality_issue",
+            "pydantic_usage": "pydantic_issue",
+            "pydantic_": "pydantic_issue",
+            "project_structure": "structure_issue",
+        }
+
+        for validator_name, result in validation_results.items():
+            if not isinstance(result, dict):
+                continue
+
+            # Determine category from validator name
+            category = "general"
+            for pattern, mapped_category in category_map.items():
+                if validator_name.startswith(pattern) or validator_name == pattern:
+                    category = mapped_category
+                    break
+
+            # Get file path from result level (for validators that store it there)
+            result_file = result.get("file", "")
+
+            # Extract all issues (no truncation!)
+            issues = result.get("issues", [])
+            for issue in issues:
+                # Extract file_path
+                file_path = issue.get("file") or result_file
+                if not file_path:
+                    # Try to infer from validator name (e.g., "signatures_service.py" -> extract service.py)
+                    if validator_name.startswith("signatures_") or validator_name.startswith("code_quality_"):
+                        # Check file_path_mapping
+                        if hasattr(self, '_file_path_mapping') and validator_name in self._file_path_mapping:
+                            file_path = self._file_path_mapping[validator_name]
+                        else:
+                            file_path = "unknown"
+                    else:
+                        file_path = "unknown"
+
+                # Extract line number
+                line_number = issue.get("line")
+
+                # Extract message
+                message = issue.get("message", str(issue))
+
+                # Create extracted issue
+                extracted_issues.append(ExtractedIssue(
+                    category=category,
+                    file_path=file_path,
+                    line_number=line_number,
+                    message=message,
+                    validator_name=validator_name,
+                    validator_issue=issue,
+                ))
+
+        return extracted_issues
+
+    def _extract_file_path_from_validator_context(
+        self,
+        issue: dict,
+        validator_name: str,
+        validator_results: dict[str, Any],
+    ) -> str | None:
+        """Extract file_path from validator context when missing from issue.
+
+        Some validators store file at result level, not issue level.
+        This method attempts to find the file_path by checking:
+        1. Validator result-level "file" field
+        2. Validator name patterns (e.g., "signatures_service.py" -> check signatures validator)
+        """
+        # Try to get file from validator result
+        if validator_name in validator_results:
+            result = validator_results[validator_name]
+            if isinstance(result, dict):
+                # Check result-level file
+                file_path = result.get("file")
+                if file_path:
+                    return file_path
+
+        # Try to infer validator from issue category or validator name pattern
+        # For signatures validator: pattern is "signatures_<filename>"
+        if validator_name.startswith("signatures_"):
+            # Extract filename from validator name
+            filename = validator_name.replace("signatures_", "")
+            if filename in validator_results:
+                result = validator_results[validator_name]
+                if isinstance(result, dict):
+                    file_path = result.get("file")
+                    if file_path:
+                        return file_path
+
+        # For code_quality validator: pattern is "code_quality_<filename>"
+        if validator_name.startswith("code_quality_"):
+            if validator_name in validator_results:
+                result = validator_results[validator_name]
+                if isinstance(result, dict):
+                    file_path = result.get("file")
+                    if file_path:
+                        return file_path
+
+        return None
+
+    def _parse_llm_response_with_extracted_issues(
+        self,
+        response: str,
+        extracted_issues: list[ExtractedIssue],
+    ) -> LLMReviewOutput:
+        """Parse LLM response and merge with deterministically extracted issues.
+
+        The LLM only provides severity and suggestions. We merge these with
+        the pre-extracted issues to ensure all issues are included.
+        """
         try:
             # Try to extract JSON from the response
             content = response.strip()
@@ -420,9 +566,212 @@ Respond with JSON:
                 content = content.split("```")[1].split("```")[0]
 
             data = json.loads(content)
+            llm_issues = data.get("issues", [])
+
+            # Create a mapping from extracted issues to LLM issues
+            # Match by message (first 50 chars) and file_path
+            issue_map = {}
+            for llm_issue in llm_issues:
+                msg_key = llm_issue.get("message", "")[:50]
+                file_key = llm_issue.get("file_path", "")
+                issue_map[(msg_key, file_key)] = llm_issue
+
+            # Merge extracted issues with LLM output
+            merged_issues = []
+            for extracted in extracted_issues:
+                msg_key = extracted.message[:50]
+                file_key = extracted.file_path
+                llm_issue = issue_map.get((msg_key, file_key))
+
+                if llm_issue:
+                    # Use LLM's severity and suggestion
+                    merged_issues.append(ReviewIssue(
+                        category=extracted.category,
+                        severity=llm_issue.get("severity", "warning"),
+                        file_path=extracted.file_path,
+                        line_number=extracted.line_number,
+                        message=extracted.message,
+                        suggestion=llm_issue.get("suggestion"),
+                    ))
+                else:
+                    # LLM didn't provide output for this issue, use defaults
+                    logger.warning(
+                        f"LLM didn't provide severity/suggestion for issue: "
+                        f"{extracted.category} in {extracted.file_path}"
+                    )
+                    merged_issues.append(ReviewIssue(
+                        category=extracted.category,
+                        severity="warning",  # Default severity
+                        file_path=extracted.file_path,
+                        line_number=extracted.line_number,
+                        message=extracted.message,
+                        suggestion=None,
+                    ))
+
+            # Ensure we have all extracted issues (defense in depth)
+            if len(merged_issues) != len(extracted_issues):
+                logger.warning(
+                    f"Issue count mismatch: extracted={len(extracted_issues)}, "
+                    f"merged={len(merged_issues)}. Using extracted issues."
+                )
+                # Rebuild from extracted issues if mismatch
+                merged_issues = [
+                    ReviewIssue(
+                        category=extracted.category,
+                        severity="warning",
+                        file_path=extracted.file_path,
+                        line_number=extracted.line_number,
+                        message=extracted.message,
+                        suggestion=None,
+                    )
+                    for extracted in extracted_issues
+                ]
+
+            summary = data.get("summary", "Code review completed")
+            passed = data.get("passed", True)
+
+            return LLMReviewOutput(
+                issues=merged_issues,
+                summary=summary,
+                passed=passed,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to parse LLM response: {e}")
+            logger.debug(f"LLM response (first 500 chars): {response[:500]}")
+            # Return fallback output
+            return self._create_fallback_output(extracted_issues, str(e))
+
+    def _create_fallback_output(
+        self,
+        extracted_issues: list[ExtractedIssue],
+        error_msg: str = "",
+    ) -> LLMReviewOutput:
+        """Create fallback output when LLM fails, using extracted issues with default severity."""
+        issues = [
+            ReviewIssue(
+                category=extracted.category,
+                severity="warning",  # Default severity
+                file_path=extracted.file_path,
+                line_number=extracted.line_number,
+                message=extracted.message,
+                suggestion=None,
+            )
+            for extracted in extracted_issues
+        ]
+
+        summary = f"Code review completed. {len(issues)} issues found."
+        if error_msg:
+            summary += f" (LLM analysis failed: {error_msg})"
+
+        # Determine passed status based on issue categories
+        has_errors = any(
+            issue.category == "signature_mismatch" or
+            issue.category == "cross_file_issue"
+            for issue in issues
+        )
+
+        return LLMReviewOutput(
+            issues=issues,
+            summary=summary,
+            passed=not has_errors,
+        )
+
+    def _parse_llm_response(
+        self,
+        response: str,
+        validator_results: dict[str, Any] | None = None,
+    ) -> LLMReviewOutput:
+        """Parse the LLM response into structured output.
+
+        Args:
+            response: Raw LLM response string
+            validator_results: Optional validator results for fallback file_path extraction
+        """
+        validator_results = validator_results or {}
+
+        try:
+            # Try to extract JSON from the response
+            content = response.strip()
+
+            # Handle markdown code blocks
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0]
+
+            data = json.loads(content)
+
+            # Sanitize issues: ensure file_path is never None
+            sanitized_issues = []
+            for i, issue in enumerate(data.get("issues", [])):
+                file_path = issue.get("file_path")
+
+                # If file_path is None or empty, try to extract from validator context
+                if not file_path:
+                    category = issue.get("category", "")
+                    message = issue.get("message", "")
+
+                    # Map category to likely validator patterns
+                    validator_patterns = {
+                        "signature_mismatch": ["signatures_"],
+                        "code_quality_issue": ["code_quality_"],
+                        "test_quality": ["test_quality_"],
+                        "pydantic_issue": ["pydantic_usage", "pydantic_"],
+                        "cross_file_issue": ["cross_file_usage", "cross_file_"],
+                        "structure_issue": ["project_structure"],
+                    }
+
+                    # Try to find matching validator by category
+                    prefixes = validator_patterns.get(category, [])
+                    for prefix in prefixes:
+                        for validator_name in validator_results.keys():
+                            if validator_name.startswith(prefix) or validator_name == prefix:
+                                file_path = self._extract_file_path_from_validator_context(
+                                    issue, validator_name, validator_results
+                                )
+                                if file_path:
+                                    break
+                        if file_path:
+                            break
+
+                    # If still not found, try all validators (fallback)
+                    if not file_path:
+                        for validator_name, result in validator_results.items():
+                            if isinstance(result, dict):
+                                # Check if this validator has a file at result level
+                                result_file = result.get("file")
+                                if result_file:
+                                    # Check if this validator's issues match this category
+                                    validator_issues = result.get("issues", [])
+                                    # Try to match by checking if message appears in validator issues
+                                    for v_issue in validator_issues:
+                                        v_msg = v_issue.get("message", "")
+                                        if message[:50] in v_msg or v_msg[:50] in message:
+                                            file_path = result_file
+                                            break
+                                    if file_path:
+                                        break
+
+                    # If still not found, use "unknown"
+                    if not file_path:
+                        logger.warning(
+                            f"Issue {i} missing file_path, category: {category}, "
+                            f"message: {message[:50]}... Using 'unknown' as fallback."
+                        )
+                        file_path = "unknown"
+
+                # Update issue with sanitized file_path
+                issue["file_path"] = file_path
+                sanitized_issues.append(issue)
+
+            # Replace issues with sanitized version
+            data["issues"] = sanitized_issues
+
             return LLMReviewOutput(**data)
         except Exception as e:
             logger.warning(f"Failed to parse LLM response: {e}")
+            # Log the response for debugging (truncated)
+            logger.debug(f"LLM response (first 500 chars): {response[:500]}")
             # Return a safe default
             return LLMReviewOutput(
                 issues=[],
@@ -499,7 +848,9 @@ Respond with JSON:
                 severity = IssueSeverity.WARNING
 
             # Normalize file path to be relative to code_root
-            normalized_path = self._normalize_file_path(issue.file_path)
+            # Safety check: ensure file_path is not None (should be handled by sanitization)
+            file_path = issue.file_path or "unknown"
+            normalized_path = self._normalize_file_path(file_path)
 
             comments.append(ReviewComment(
                 category=category,
@@ -587,12 +938,19 @@ Respond with JSON:
                 total_validator_issues += len(result["issues"])
         self._log(f"  Validators found {total_validator_issues} potential issues")
 
-        # Phase 3: LLM Analysis
-        self._log("Phase 3: LLM Analysis")
+        # Phase 2.5: Deterministic Issue Extraction
+        phase_start = datetime.now()
+        self._log("Phase 2.5: Deterministic Issue Extraction")
+        extracted_issues = self._extract_issues_deterministically(validation_results)
+        extraction_time = (datetime.now() - phase_start).total_seconds()
+        self._log(f"  Extracted {len(extracted_issues)} issues deterministically in {extraction_time:.2f}s")
+
+        # Phase 3: LLM Analysis (Severity Assignment & Suggestions Only)
+        self._log("Phase 3: LLM Analysis (Severity & Suggestions)")
         prompt = self._build_analysis_prompt(
             spec_content=spec_content,
             file_contents=file_contents,
-            validation_results=validation_results,
+            extracted_issues=extracted_issues,
             coding_guidelines=coding_guidelines or "",
             modules_description=modules_description or "",
         )
@@ -602,14 +960,12 @@ Respond with JSON:
             # Extract string content from response (handles both str and list formats)
             content = response.content
             content = " ".join(str(item) for item in content) if isinstance(content, list) else str(content)
-            llm_output = self._parse_llm_response(content)
+            # Parse LLM response and merge with extracted issues
+            llm_output = self._parse_llm_response_with_extracted_issues(content, extracted_issues)
         except Exception as e:
             logger.error(f"LLM analysis failed: {e}")
-            llm_output = LLMReviewOutput(
-                issues=[],
-                summary=f"LLM analysis failed: {e}",
-                passed=True
-            )
+            # Fallback: use extracted issues with default severity
+            llm_output = self._create_fallback_output(extracted_issues, str(e))
 
         # Phase 4: Report
         self._log("Phase 4: Report Generation")

@@ -109,7 +109,7 @@ def main():
     if args.component_docs:
         docs_path = Path(args.component_docs)
         if docs_path.exists():
-            component_docs = docs_path.read_text()
+            component_docs = docs_path.read_text(encoding='utf-8')
         else:
             print(f"Warning: Component docs file not found: {args.component_docs}", file=sys.stderr)
 

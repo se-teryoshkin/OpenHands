@@ -199,7 +199,7 @@ def extract_signatures_tool(file_path: str) -> str:
         if not path.exists():
             return json.dumps({"error": f"File not found: {file_path}"})
 
-        code = path.read_text()
+        code = path.read_text(encoding='utf-8')
         tree = ast.parse(code)
 
         extractor = SignatureExtractor()
@@ -236,7 +236,7 @@ def extract_field_accesses_tool(file_path: str) -> str:
         if not path.exists():
             return json.dumps({"error": f"File not found: {file_path}"})
 
-        code = path.read_text()
+        code = path.read_text(encoding='utf-8')
         tree = ast.parse(code)
 
         extractor = FieldAccessExtractor()
@@ -272,7 +272,7 @@ def extract_test_info_tool(test_file_path: str) -> str:
         if not path.exists():
             return json.dumps({"error": f"File not found: {test_file_path}"})
 
-        code = path.read_text()
+        code = path.read_text(encoding='utf-8')
         tree = ast.parse(code)
 
         extractor = TestInfoExtractor()

@@ -110,7 +110,7 @@ def validate_signatures_tool(
         if not path.exists():
             return json.dumps({"error": f"Implementation file not found: {impl_file}"})
 
-        impl_code = path.read_text()
+        impl_code = path.read_text(encoding='utf-8')
 
         # Parse specifications
         spec_sigs = _parse_signature_from_spec(spec_interface)
@@ -118,6 +118,7 @@ def validate_signatures_tool(
 
         results = {
             "valid": True,
+            "file": impl_file,  # Store file path for fallback extraction
             "issues": [],
             "spec_methods": [s["name"] for s in spec_sigs],
             "impl_methods": [s["name"] for s in impl_sigs],
@@ -210,7 +211,7 @@ def validate_field_access_tool(
         if not path.exists():
             return json.dumps({"error": f"Source file not found: {source_file}"})
 
-        source_code = path.read_text()
+        source_code = path.read_text(encoding='utf-8')
 
         # Extract valid fields from class definition
         valid_fields = set()
@@ -391,7 +392,7 @@ def validate_test_quality_tool(
         if not path.exists():
             return json.dumps({"error": f"Test file not found: {test_file}"})
 
-        code = path.read_text()
+        code = path.read_text(encoding='utf-8')
 
         try:
             tree = ast.parse(code)
@@ -540,7 +541,7 @@ def validate_model_field_mapping_tool(
         if not path.exists():
             return json.dumps({"error": f"Implementation file not found: {implementation_file}"})
 
-        impl_code = path.read_text()
+        impl_code = path.read_text(encoding='utf-8')
 
         # Parse source model fields
         source_fields = _extract_model_fields(source_model_definition)
@@ -978,7 +979,7 @@ def validate_code_quality_tool(file_path: str) -> str:
         if not path.exists():
             return json.dumps({"error": f"File not found: {file_path}"})
 
-        code = path.read_text()
+        code = path.read_text(encoding='utf-8')
         is_test_file = 'test_' in path.name or path.name.startswith('test')
 
         try:
