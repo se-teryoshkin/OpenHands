@@ -118,6 +118,7 @@ def validate_signatures_tool(
 
         results = {
             "valid": True,
+            "file": impl_file,  # Store file path for fallback extraction
             "issues": [],
             "spec_methods": [s["name"] for s in spec_sigs],
             "impl_methods": [s["name"] for s in impl_sigs],
