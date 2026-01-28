@@ -2,48 +2,21 @@
   "passed": false,
   "comments": [
     {
-      "category": "signature_mismatch",
-      "severity": "error",
-      "file_path": "src/chat_module/service.py",
-      "line_number": null,
-      "message": "Method 'start_screening' from spec not implemented",
-      "suggestion": "Implement the `start_screening` method in `ScreeningService` according to the specification, handling chat and search existence checks and publishing the task via `RedisScreeningTasksPublisher`.",
-      "spec_reference": null
-    },
-    {
-      "category": "signature_mismatch",
-      "severity": "error",
-      "file_path": "src/chat_module/service.py",
-      "line_number": null,
-      "message": "Method 'get_screening_status' from spec not implemented",
-      "suggestion": "Add the `get_screening_status` method to the service, delegating to `RedisScreeningTasksPublisher` to retrieve the current task status.",
-      "spec_reference": null
-    },
-    {
-      "category": "signature_mismatch",
-      "severity": "error",
-      "file_path": "src/chat_module/service.py",
-      "line_number": null,
-      "message": "Method 'wait_for_screening' from spec not implemented",
-      "suggestion": "Implement the `wait_for_screening` method with default timeout of 20 seconds, polling every second, and map `TaskStatus` to `ScreeningResultResponse` using the described defaults.",
+      "category": "code_quality_issue",
+      "severity": "warning",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 245,
+      "message": "'except Exception:' without re-raise suppresses all errors. Either handle specific exceptions or re-raise.",
+      "suggestion": "Same as above – catch only the exceptions you expect and re‑raise or log unexpected ones.",
       "spec_reference": null
     },
     {
       "category": "code_quality_issue",
       "severity": "warning",
-      "file_path": "src/screening_module/service.py",
-      "line_number": 246,
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 166,
       "message": "'except Exception:' without re-raise suppresses all errors. Either handle specific exceptions or re-raise.",
-      "suggestion": "Catch specific exception types or, after logging/handling, re‑raise the exception to avoid silently swallowing errors.",
-      "spec_reference": null
-    },
-    {
-      "category": "code_quality_issue",
-      "severity": "warning",
-      "file_path": "src/screening_module/service.py",
-      "line_number": 221,
-      "message": "'except Exception:' without re-raise suppresses all errors. Either handle specific exceptions or re-raise.",
-      "suggestion": "Replace the bare `except Exception:` with targeted exception handling or re‑raise after any necessary cleanup.",
+      "suggestion": "Same as above – catch only the exceptions you expect and re‑raise or log unexpected ones.",
       "spec_reference": null
     },
     {
@@ -52,119 +25,524 @@
       "file_path": ".downloads/example_usage.py",
       "line_number": 55,
       "message": "'except Exception:' without re-raise suppresses all errors. Either handle specific exceptions or re-raise.",
-      "suggestion": "Handle only expected exception types or re‑raise the caught exception after logging to avoid hiding bugs.",
+      "suggestion": "Catch concrete exceptions (e.g., `ConnectionError`, `ValueError`) and re‑raise or log them; avoid a blanket `except Exception:` that hides bugs.",
       "spec_reference": null
     },
     {
       "category": "test_quality",
       "severity": "warning",
-      "file_path": "tests/supervisor_module/test_tool_integration.py",
+      "file_path": "unknown",
       "line_number": null,
       "message": "Tests only check method existence with hasattr() (4 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
-      "suggestion": "Rewrite the tests to call the actual methods, provide necessary fixtures/mocks, and assert expected outcomes instead of merely checking for attribute presence.",
+      "suggestion": "Same as above – ensure tests execute the code paths they intend to verify.",
       "spec_reference": null
     },
     {
       "category": "test_quality",
       "severity": "warning",
-      "file_path": "tests/supervisor_module/test_singleton_pattern.py",
-      "line_number": null,
-      "message": "Tests only check method existence with hasattr() (4 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
-      "suggestion": "Update the singleton pattern tests to instantiate the service, verify that only one instance exists, and test its functional methods.",
-      "spec_reference": null
-    },
-    {
-      "category": "test_quality",
-      "severity": "warning",
-      "file_path": "tests/screening_module/test_screening_service.py",
-      "line_number": null,
-      "message": "Tests only check method existence with hasattr() (2 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
-      "suggestion": "Enhance the screening service tests to call `start_screening`, `get_screening_status`, and `wait_for_screening` with mock dependencies and assert correct results.",
-      "spec_reference": null
-    },
-    {
-      "category": "test_quality",
-      "severity": "warning",
-      "file_path": "tests/vacancy_module/test_functional_works.py",
-      "line_number": null,
-      "message": "Tests only check method existence with hasattr() (5 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
-      "suggestion": "Convert the placeholder tests into functional integration tests that exercise the full workflow.",
-      "spec_reference": null
-    },
-    {
-      "category": "test_quality",
-      "severity": "warning",
-      "file_path": "tests/supervisor_module/test_supervisor_service.py",
+      "file_path": "unknown",
       "line_number": null,
       "message": "Tests only check method existence with hasattr() (7 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
-      "suggestion": "Implement real test cases for the supervisor service, invoking its public methods and checking the responses.",
+      "suggestion": "Same as above – ensure tests execute the code paths they intend to verify.",
       "spec_reference": null
     },
     {
       "category": "test_quality",
       "severity": "warning",
-      "file_path": "tests/chat_module/test_chat_service_comprehensive.py",
+      "file_path": "unknown",
+      "line_number": null,
+      "message": "Tests only check method existence with hasattr() (5 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
+      "suggestion": "Same as above – ensure tests execute the code paths they intend to verify.",
+      "spec_reference": null
+    },
+    {
+      "category": "test_quality",
+      "severity": "warning",
+      "file_path": "unknown",
       "line_number": null,
       "message": "Tests only check method existence with hasattr() (6 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
-      "suggestion": "Write comprehensive tests for the chat service that perform actual CRUD operations and validate state changes.",
+      "suggestion": "Same as above – ensure tests execute the code paths they intend to verify.",
+      "spec_reference": null
+    },
+    {
+      "category": "test_quality",
+      "severity": "warning",
+      "file_path": "unknown",
+      "line_number": null,
+      "message": "Tests only check method existence with hasattr() (4 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
+      "suggestion": "Same as above – ensure tests execute the code paths they intend to verify.",
+      "spec_reference": null
+    },
+    {
+      "category": "test_quality",
+      "severity": "warning",
+      "file_path": "unknown",
+      "line_number": null,
+      "message": "Tests only check method existence with hasattr() (2 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
+      "suggestion": "Same as above – ensure tests execute the code paths they intend to verify.",
       "spec_reference": null
     },
     {
       "category": "pydantic_issue",
       "severity": "warning",
-      "file_path": "src/storage_module/models.py",
+      "file_path": "unknown",
       "line_number": null,
       "message": "Model 'IdNameObject' is defined in multiple files: src/storage_module/models.py, src/vacancy_module/service.py. Consider using a shared definition.",
-      "suggestion": "Extract `IdNameObject` into a common module (e.g., `src/common/models.py`) and import it from both locations to avoid duplication.",
+      "suggestion": "Extract `IdNameObject` into a common module (e.g., `src/common/models.py`) and import it wherever needed to avoid duplication and keep a single source of truth.",
       "spec_reference": null
     },
     {
       "category": "cross_file_issue",
-      "severity": "warning",
+      "severity": "error",
       "file_path": "src/storage_module/service.py",
       "line_number": 145,
       "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
-      "suggestion": "Ensure that `RedisStorageService` defines `self.redis_client` (e.g., in `__init__`) or rename the attribute to the correct one.",
+      "suggestion": "Initialize `self.redis_client`.",
       "spec_reference": null
     },
     {
       "category": "cross_file_issue",
-      "severity": "warning",
+      "severity": "error",
       "file_path": "src/storage_module/service.py",
       "line_number": 189,
       "message": "Possibly invalid member access 'ChatResponse.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)",
-      "suggestion": "Replace `ChatResponse.model_validate_json` with the correct Pydantic method such as `ChatResponse.model_validate` or `ChatResponse.parse_raw`.",
+      "suggestion": "Use the correct parsing method for the Pydantic version (`ChatResponse.parse_raw` for v1 or `ChatResponse.model_validate_json` for v2).",
       "spec_reference": null
     },
     {
       "category": "cross_file_issue",
-      "severity": "warning",
+      "severity": "error",
       "file_path": "src/storage_module/service.py",
       "line_number": 315,
       "message": "Possibly invalid member access 'SearchDetailsResponse.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)",
-      "suggestion": "Use the appropriate Pydantic validation method (`parse_raw` or `model_validate`) instead of the non‑existent `model_validate_json`.",
+      "suggestion": "Use the correct parsing method for the installed Pydantic version.",
       "spec_reference": null
     },
     {
       "category": "cross_file_issue",
-      "severity": "warning",
+      "severity": "error",
       "file_path": "src/storage_module/service.py",
       "line_number": 373,
       "message": "Possibly invalid member access 'ScreeningTaskInfo.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)",
-      "suggestion": "Replace the call with a valid Pydantic method such as `ScreeningTaskInfo.parse_raw`.",
+      "suggestion": "Same as previous entry – verify Pydantic version and use the correct method.",
       "spec_reference": null
     },
     {
       "category": "cross_file_issue",
-      "severity": "warning",
+      "severity": "error",
       "file_path": "src/storage_module/service.py",
       "line_number": 386,
       "message": "Possibly invalid member access 'ScreeningTaskInfo.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)",
-      "suggestion": "Use a correct Pydantic parsing method (`parse_raw`/`model_validate`) instead of the undefined `model_validate_json`.",
+      "suggestion": "Same as previous entry – verify Pydantic version and use the correct method.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 175,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 175,
+      "message": "Possibly invalid member access 'chat.model_dump_json' (could not resolve 'model_dump_json' on inferred project symbol)",
+      "suggestion": "If using Pydantic v2, `model_dump_json` is valid; otherwise replace with `json()` or `dict()` then `json.dumps`. Align the code with the project's Pydantic version.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 186,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 198,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 216,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 220,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 226,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 232,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 236,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 250,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 250,
+      "message": "Possibly invalid member access 'message.model_dump_json' (could not resolve 'model_dump_json' on inferred project symbol)",
+      "suggestion": "Replace with `message.json()` for Pydantic v1 or `message.model_dump_json()` for v2, matching the installed version.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 254,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 267,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 295,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 295,
+      "message": "Possibly invalid member access 'search.model_dump_json' (could not resolve 'model_dump_json' on inferred project symbol)",
+      "suggestion": "Use `search.json()` (v1) or `search.model_dump_json()` (v2) according to the Pydantic version.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 299,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 312,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 326,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 354,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 354,
+      "message": "Possibly invalid member access 'task.model_dump_json' (could not resolve 'model_dump_json' on inferred project symbol)",
+      "suggestion": "Replace with appropriate serialization method (`task.json()` or `task.model_dump_json()`).",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 358,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 370,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 383,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 404,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 201,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 203,
+      "message": "Possibly invalid member access 'ChatResponse.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)",
+      "suggestion": "Use the correct parsing method for the Pydantic version (`ChatResponse.parse_raw` for v1 or `ChatResponse.model_validate_json` for v2).",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 222,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 228,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 276,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 278,
+      "message": "Possibly invalid member access 'MessageResponse.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)",
+      "suggestion": "Replace with the appropriate parsing method (`MessageResponse.parse_raw` or `MessageResponse.model_validate_json`).",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 335,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 337,
+      "message": "Possibly invalid member access 'SearchDetailsResponse.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)",
+      "suggestion": "Use the correct parsing method for the installed Pydantic version.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/storage_module/service.py",
+      "line_number": 399,
+      "message": "Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)",
+      "suggestion": "Initialize `self.redis_client`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 9,
+      "message": "Unresolved import module: from typing_extensions import ...",
+      "suggestion": "Add `typing-extensions` to the project's dependencies (e.g., `pip install typing-extensions`) and ensure the import statement matches the needed symbols.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 9,
+      "message": "Unresolved imported symbol: from typing_extensions import runtime_checkable",
+      "suggestion": "Import `runtime_checkable` from `typing` (Python 3.8+) or ensure `typing-extensions` is installed and the import path is correct.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 11,
+      "message": "Unresolved import module: from langchain_core.messages import ...",
+      "suggestion": "Add `langchain-core` (or the appropriate LangChain package) to the project's dependencies and verify the module path; e.g., `from langchain.schema import HumanMessage` if using newer versions.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 11,
+      "message": "Unresolved imported symbol: from langchain_core.messages import HumanMessage",
+      "suggestion": "Same as above – verify the package provides `ToolMessage` or use an alternative representation.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 11,
+      "message": "Unresolved imported symbol: from langchain_core.messages import AIMessage",
+      "suggestion": "Same as above – verify the package provides `ToolMessage` or use an alternative representation.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 11,
+      "message": "Unresolved imported symbol: from langchain_core.messages import ToolMessage",
+      "suggestion": "Same as above – verify the package provides `ToolMessage` or use an alternative representation.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 12,
+      "message": "Unresolved import module: from langchain_core.tools import ...",
+      "suggestion": "Add the appropriate LangChain tools package to dependencies and correct the import path (e.g., `from langchain.tools import tool`).",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 12,
+      "message": "Unresolved imported symbol: from langchain_core.tools import tool",
+      "suggestion": "Ensure the `tool` decorator exists in the installed version; if not, import from `langchain.tools` or define a compatible wrapper.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 13,
+      "message": "Unresolved import module: from langchain_openai import ...",
+      "suggestion": "Add `langchain-openai` (or the appropriate package) to dependencies and verify the import path; e.g., `from langchain_openai import ChatOpenAI`.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 13,
+      "message": "Unresolved imported symbol: from langchain_openai import ChatOpenAI",
+      "suggestion": "Install the correct package and import `ChatOpenAI` from the proper module.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 57,
+      "message": "Possibly invalid member access 'self.llm' (could not resolve 'llm' on inferred project symbol)",
+      "suggestion": "Same as above – initialize or inject `self.llm` before any method accesses it.",
+      "spec_reference": null
+    },
+    {
+      "category": "cross_file_issue",
+      "severity": "error",
+      "file_path": "src/supervisor_module/service.py",
+      "line_number": 354,
+      "message": "Possibly invalid member access 'self.llm' (could not resolve 'llm' on inferred project symbol)",
+      "suggestion": "Same as above – initialize or inject `self.llm` before any method accesses it.",
       "spec_reference": null
     }
   ],
-  "summary": "The review identified missing method implementations, broad exception handling, insufficient test coverage, duplicated Pydantic models, and several questionable attribute accesses. Critical signature mismatches must be fixed; other issues are warnings.",
+  "summary": "All reported issues have been classified; numerous cross‑file errors (missing attributes, incorrect imports, and Pydantic method mismatches) are critical and must be fixed, while broad exception handling and test quality issues are warnings.",
   "files_reviewed": [
     "tests/__init__.py",
     ".downloads/example_usage.py",
