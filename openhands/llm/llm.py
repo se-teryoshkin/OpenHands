@@ -191,7 +191,7 @@ class LLM(RetryMixin, DebugMixin):
         # Prefer temperature (drop top_p) if both are specified.
         _model_lower = self.config.model.lower()
         # Limit to Opus 4.1 specifically to avoid changing behavior of other Anthropic models
-        if ('claude-opus-4-1' in _model_lower) and (
+        if (('claude-opus-4-1' in _model_lower) or ('claude-sonnet-4-5' in _model_lower)) and (
             'temperature' in kwargs and 'top_p' in kwargs
         ):
             kwargs.pop('top_p', None)
