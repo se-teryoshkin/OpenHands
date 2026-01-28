@@ -4,10 +4,10 @@
     {
       "category": "signature_mismatch",
       "severity": "error",
-      "file_path": "signatures_service.py",
+      "file_path": "service.py",
       "line_number": null,
       "message": "Return type mismatch in 'get_vacancy': expected 'VacancyResponse', got ''ExternalVacancyResponse''",
-      "suggestion": "Change the return annotation of `VacancyService.get_vacancy` (and its implementation) to use the `VacancyResponse` model defined in the specification, or rename `ExternalVacancyResponse` to `VacancyResponse` and ensure it matches the expected schema.",
+      "suggestion": "Update the `get_vacancy` method signature to return `VacancyResponse` as defined in the module specification. Either rename `ExternalVacancyResponse` to `VacancyResponse` and ensure it matches the expected schema, or convert the `ExternalVacancyResponse` instance to a `VacancyResponse` before returning.",
       "spec_reference": null
     },
     {
@@ -16,59 +16,14 @@
       "file_path": "test_service.py",
       "line_number": null,
       "message": "Tests only check method existence with hasattr() (3 times) but never actually call the methods. Tests should invoke methods and verify behavior.",
-      "suggestion": "Extend the tests to call `create_vacancy`, `get_vacancy`, and `list_vacancies` on a real or mocked `VacancyService` instance, assert expected return types/values, and handle possible exceptions. Use fixtures or mocks for the underlying HH client to keep tests deterministic.",
-      "spec_reference": null
-    },
-    {
-      "category": "cross_file_issue",
-      "severity": "error",
-      "file_path": "service.py",
-      "line_number": null,
-      "message": "Unresolved import module: `from appfactory.components.implementation.hh.client import HHClientImplementation`",
-      "suggestion": "Add the missing `appfactory.components.implementation.hh.client` module to the project or adjust the import path to point to the correct location where `HHClientImplementation` is defined.",
-      "spec_reference": null
-    },
-    {
-      "category": "cross_file_issue",
-      "severity": "error",
-      "file_path": "service.py",
-      "line_number": null,
-      "message": "Unresolved imported symbol: `HHClientImplementation`",
-      "suggestion": "Ensure that `HHClientImplementation` is exported from the referenced module (e.g., add it to `__all__` or define the class) and that the module is on the Python path.",
-      "spec_reference": null
-    },
-    {
-      "category": "cross_file_issue",
-      "severity": "error",
-      "file_path": "service.py",
-      "line_number": null,
-      "message": "Unresolved import module: `from appfactory.components.api.hh.vacancy import VacancyDraftCreateRequest, VacancyDraft`",
-      "suggestion": "Create the `appfactory.components.api.hh.vacancy` package with the `VacancyDraftCreateRequest` and `VacancyDraft` classes, or correct the import to the actual module where these Pydantic models are defined.",
-      "spec_reference": null
-    },
-    {
-      "category": "cross_file_issue",
-      "severity": "error",
-      "file_path": "service.py",
-      "line_number": null,
-      "message": "Unresolved imported symbol: `VacancyDraftCreateRequest`",
-      "suggestion": "Define the `VacancyDraftCreateRequest` model (e.g., as a Pydantic BaseModel) in the referenced module and ensure it is exported.",
-      "spec_reference": null
-    },
-    {
-      "category": "cross_file_issue",
-      "severity": "error",
-      "file_path": "service.py",
-      "line_number": null,
-      "message": "Unresolved imported symbol: `VacancyDraft`",
-      "suggestion": "Define the `VacancyDraft` model in the `appfactory.components.api.hh.vacancy` module and export it, or adjust the import to the correct symbol name.",
+      "suggestion": "Enhance the test suite to call each service method (`create_vacancy`, `get_vacancy`, `list_vacancies`) using realistic or mocked inputs and assert on the returned values. Use a mock or stub for `HHClientImplementation` to isolate the service logic and verify that the service correctly forwards requests and processes responses.",
       "spec_reference": null
     }
   ],
-  "summary": "The code has a signature mismatch for `get_vacancy`, insufficient test coverage, and multiple unresolved imports for HH client and vacancy models.",
+  "summary": "Two issues were detected: a signature mismatch for `get_vacancy` and insufficient test coverage that only checks method existence.",
   "files_reviewed": [
-    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_id7zvgcr/src/vacancy_module/service.py",
-    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_id7zvgcr/src/vacancy_module/test_service.py",
-    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_id7zvgcr/src/vacancy_module/__init__.py"
+    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_ppkij7pk/src/vacancy_module/service.py",
+    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_ppkij7pk/src/vacancy_module/test_service.py",
+    "/var/folders/15/ndgr3kqs6tl6qwxbf1tt4t5c0000gn/T/code_review_ppkij7pk/src/vacancy_module/__init__.py"
   ]
 }

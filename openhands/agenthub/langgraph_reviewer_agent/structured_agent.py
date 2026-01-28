@@ -175,6 +175,7 @@ class StructuredCodeReviewAgent:
         files: dict,
         file_contents: dict[str, str],
         api_data_structures: str = "",
+        external_components_path: str = "",
     ) -> dict[str, Any]:
         """Run all validators in parallel and collect results."""
         results = {}
@@ -250,6 +251,7 @@ class StructuredCodeReviewAgent:
                 "code_root": code_root,
                 "max_inferences": 400,
                 "include_tests": False,
+                "external_components_path": external_components_path,
             }
         ))
 
@@ -468,6 +470,7 @@ Respond with JSON:
         data_structures: str | None = None,
         coding_guidelines: str | None = None,
         modules_description: str | None = None,
+        external_components_path: str | None = None,
     ) -> ReviewResult:
         """Run a structured code review.
 
@@ -504,6 +507,7 @@ Respond with JSON:
             files=files,
             file_contents=file_contents,
             api_data_structures=data_structures or "",
+            external_components_path=external_components_path or "",
         )
         validation_time = (datetime.now() - phase_start).total_seconds()
 

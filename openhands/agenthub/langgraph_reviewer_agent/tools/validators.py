@@ -1568,6 +1568,7 @@ def validate_cross_file_usage_tool(
     code_root: str,
     max_inferences: int = 400,
     include_tests: bool = False,
+    external_components_path: str = "",
 ) -> str:
     """Validate basic cross-file symbol resolution and usage.
 
@@ -1583,6 +1584,9 @@ def validate_cross_file_usage_tool(
         code_root: Root directory of the generated code.
         max_inferences: Hard cap on Jedi inference calls across the whole repo.
         include_tests: Whether to also analyze test_*.py files.
+        external_components_path: Optional path to external components (e.g., AppFactory-components).
+                                  Used to resolve imports but NOT validated. If provided, imports from
+                                  this path will be considered valid and not flagged as errors.
 
     Returns:
         JSON string with {valid, issues, stats}.
@@ -1592,7 +1596,18 @@ def validate_cross_file_usage_tool(
         if not root.exists():
             return json.dumps({"error": f"Directory not found: {code_root}"})
 
-        project = jedi.Project(path=str(root), sys_path=[str(root)])
+        # Build sys_path: include code_root and external_components_path if provided
+        sys_path = [str(root)]
+        external_components_root = None
+        if external_components_path:
+            external_path = Path(external_components_path)
+            if external_path.exists():
+                external_components_root = external_path
+                # Add the parent directory so imports like "appfactory.components" resolve correctly
+                sys_path.append(str(external_path.parent))
+                sys_path.append(str(external_path))
+
+        project = jedi.Project(path=str(root), sys_path=sys_path)
 
         files = _iter_python_files(code_root)
         if not include_tests:
@@ -1602,7 +1617,31 @@ def validate_cross_file_usage_tool(
         infer_calls = 0
         analyzed_files = 0
 
+        def _is_external_component_import(module_name: str) -> bool:
+            """Check if an import is from external components (should be ignored)."""
+            if not external_components_root or not module_name:
+                return False
+            # Check if module starts with appfactory (or other external component prefixes)
+            if module_name.startswith("appfactory."):
+                return True
+            # Check if the module path exists in external components
+            parts = module_name.split(".")
+            if parts:
+                potential_path = external_components_root / parts[0]
+                if potential_path.exists():
+                    return True
+            return False
+
         def _add_issue(file_path: str, line: int | None, msg: str, issue_type: str) -> None:
+            # Skip issues from external components files (we don't validate those)
+            if external_components_root:
+                try:
+                    file_path_obj = Path(file_path)
+                    if external_components_root in file_path_obj.parents or file_path_obj == external_components_root:
+                        return  # Don't report issues in external components
+                except Exception:
+                    pass
+
             issues.append(
                 {
                     "type": issue_type,
@@ -1662,6 +1701,10 @@ def validate_cross_file_usage_tool(
                     line = getattr(node, "lineno", None) or 1
                     base_col = getattr(node, "col_offset", 0)
 
+                    # Skip external component imports (they're trusted, not validated)
+                    if node.module and _is_external_component_import(node.module):
+                        continue
+
                     # Resolve module
                     if node.module and infer_calls < max_inferences:
                         src_line = code.splitlines()[line - 1] if 0 < line <= len(code.splitlines()) else ""
@@ -1680,28 +1723,29 @@ def validate_cross_file_usage_tool(
                                 "unresolved_import",
                             )
 
-                    # Resolve imported names
-                    for alias in node.names:
-                        if infer_calls >= max_inferences:
-                            break
-                        if alias.name == "*":
-                            continue
+                    # Resolve imported names (skip if from external components)
+                    if not _is_external_component_import(node.module or ""):
+                        for alias in node.names:
+                            if infer_calls >= max_inferences:
+                                break
+                            if alias.name == "*":
+                                continue
 
-                        src_line = code.splitlines()[line - 1] if 0 < line <= len(code.splitlines()) else ""
-                        idx = src_line.find(alias.name)
-                        if idx < 0:
-                            idx = base_col
+                            src_line = code.splitlines()[line - 1] if 0 < line <= len(code.splitlines()) else ""
+                            idx = src_line.find(alias.name)
+                            if idx < 0:
+                                idx = base_col
 
-                        script = jedi.Script(code, path=str(path), project=project)
-                        infer_calls += 1
-                        inferred = script.infer(line, idx + len(alias.name))
-                        if not inferred and (node.level or 0) == 0:
-                            _add_issue(
-                                str(path),
-                                line,
-                                f"Unresolved imported symbol: from {node.module} import {alias.name}",
-                                "unresolved_import",
-                            )
+                            script = jedi.Script(code, path=str(path), project=project)
+                            infer_calls += 1
+                            inferred = script.infer(line, idx + len(alias.name))
+                            if not inferred and (node.level or 0) == 0:
+                                _add_issue(
+                                    str(path),
+                                    line,
+                                    f"Unresolved imported symbol: from {node.module} import {alias.name}",
+                                    "unresolved_import",
+                                )
 
             if infer_calls >= max_inferences:
                 break

@@ -99,6 +99,7 @@ def run_review_example(
     data_structures_path: Path | None = None,
     coding_guidelines_path: Path | None = None,
     modules_description_path: Path | None = None,
+    external_components_path: Path | None = None,
     use_react: bool = False,
 ):
     """Run the code review example.
@@ -111,6 +112,8 @@ def run_review_example(
         data_structures_path: Optional path to API data structures file.
         coding_guidelines_path: Optional path to coding guidelines file.
         modules_description_path: Optional path to modules description file.
+        external_components_path: Optional path to external components directory (e.g., AppFactory-components).
+                                  Used to resolve imports but NOT validated.
         use_react: If True, use ReAct CodeReviewAgent (slower, more exploratory).
                   Default is False, using StructuredCodeReviewAgent (faster, better quality).
     """
@@ -214,6 +217,11 @@ def run_review_example(
             modules_description = modules_description_path.read_text(encoding='utf-8')
             print(f"📖 Using modules description: {modules_description_path}")
 
+        external_components = None
+        if external_components_path and external_components_path.exists():
+            external_components = str(external_components_path)
+            print(f"📦 Using external components: {external_components_path}")
+
         print()
         print("=" * 60)
         print("STARTING REVIEW...")
@@ -223,13 +231,18 @@ def run_review_example(
         # Run the review with timing
         start_time = time.time()
         try:
-            result = agent.review(
-                spec_path=str(spec_path),
-                code_root=str(code_root),
-                data_structures=data_structures,
-                coding_guidelines=coding_guidelines,
-                modules_description=modules_description,
-            )
+            review_kwargs = {
+                "spec_path": str(spec_path),
+                "code_root": str(code_root),
+                "data_structures": data_structures,
+                "coding_guidelines": coding_guidelines,
+                "modules_description": modules_description,
+            }
+            # Only StructuredCodeReviewAgent supports external_components_path
+            if not use_react and external_components:
+                review_kwargs["external_components_path"] = external_components
+
+            result = agent.review(**review_kwargs)
         except Exception as e:
             print(f"❌ Review failed: {e}")
             if debug:
@@ -327,6 +340,12 @@ def main():
         help="Path to modules description file (default: test_data/modules_description.md)",
     )
     parser.add_argument(
+        "--external-components",
+        type=Path,
+        default=PROJECT_ROOT / "test_data" / "AppFactory-components",
+        help="Path to external components directory (default: test_data/AppFactory-components)",
+    )
+    parser.add_argument(
         "--react", "-r",
         action="store_true",
         help="Use ReAct CodeReviewAgent instead of StructuredCodeReviewAgent (slower, more exploratory)",
@@ -355,6 +374,7 @@ def main():
         data_structures_path=args.data_structures,
         coding_guidelines_path=args.guidelines,
         modules_description_path=args.modules_description,
+        external_components_path=args.external_components,
         use_react=args.react,
     )
 
