@@ -1,10 +1,10 @@
 # Code Review
 **Status:** ❌ FAILED
 
-**Summary:** The project is missing concrete implementations for the three service methods, has test suites that only verify existence of methods without exercising them, and suffers from unresolved imports of Pydantic symbols.
+**Summary:** Three signature mismatches indicate missing method implementations, and two test quality warnings highlight that tests only verify existence without exercising functionality.
 
 **Statistics:**
-- 🔴 Errors: 6
+- 🔴 Errors: 3
 - 🟡 Warnings: 2
 - 🔵 Info: 0
 
@@ -21,36 +21,22 @@
 
 🔴 **[ERROR]** Method 'create_vacancy' from spec not implemented
    - File: `src/vacancy_module/service.py`
-   - 💡 Suggestion: Add a concrete implementation of `create_vacancy` in the service class (e.g., `VacancyServiceImpl`) that uses `HHClientImplementation` to create and publish a vacancy and returns its identifier.
+   - 💡 Suggestion: Add a concrete implementation of `create_vacancy` in the service class (e.g., `VacancyServiceImpl`). The method should accept a `VacancyDraftCreateRequest`, call the appropriate method on `HHClientImplementation`, handle any errors, and return the created vacancy identifier as a string.
 
 🔴 **[ERROR]** Method 'get_vacancy' from spec not implemented
    - File: `src/vacancy_module/service.py`
-   - 💡 Suggestion: Implement `get_vacancy` in the service implementation to call the HH client, retrieve vacancy data, map it to `VacancyResponse`, and return the model.
+   - 💡 Suggestion: Implement `get_vacancy` in the service class. It must accept a vacancy ID, retrieve the vacancy data via `HHClientImplementation`, map the response to a `VacancyResponse` model, and return it.
 
 🔴 **[ERROR]** Method 'list_vacancies' from spec not implemented
    - File: `src/vacancy_module/service.py`
-   - 💡 Suggestion: Provide an implementation of `list_vacancies` that queries the HH client for vacancy IDs and returns a list of strings.
+   - 💡 Suggestion: Implement `list_vacancies` in the service class. The method should query `HHClientImplementation` for the list of vacancies and return a list of vacancy IDs (`List[str]`).
 
 ### Test Quality
 
-🟡 **[WARNING]** Tests only check method existence with hasattr() (9 times) but never actually call the methods. Tests should invoke methods and verify behavior.
-   - File: `tests/vacancy_module/test_vacancy_service.py`
-   - 💡 Suggestion: Extend the tests to instantiate the service (or use the singleton getter), call each method with realistic test data (using mocks or a test double for `HHClientImplementation`), and assert that the returned values match expected results.
-
 🟡 **[WARNING]** Tests only check method existence with hasattr() (13 times) but never actually call the methods. Tests should invoke methods and verify behavior.
    - File: `tests/vacancy_module/test_functional.py`
-   - 💡 Suggestion: Add functional test cases that execute `create_vacancy`, `get_vacancy`, and `list_vacancies` against a mocked HH client, checking that the service correctly forwards requests and returns properly constructed models.
+   - 💡 Suggestion: Rewrite the functional tests to instantiate the service (or obtain it via `get_vacancy_service`), mock the underlying `HHClientImplementation` calls, invoke `create_vacancy`, `get_vacancy`, and `list_vacancies`, and assert that the returned values match the mocked responses. This will validate real behavior instead of just existence.
 
-### Cross File Issue
-
-🔴 **[ERROR]** Unresolved import module: from pydantic import ...
-   - File: `src/vacancy_module/service.py`
-   - 💡 Suggestion: Ensure the `pydantic` package is installed in the project environment (e.g., add `pydantic>=2` to `requirements.txt`) and that the import statement is correct (`from pydantic import BaseModel, Field`).
-
-🔴 **[ERROR]** Unresolved imported symbol: from pydantic import BaseModel
-   - File: `src/vacancy_module/service.py`
-   - 💡 Suggestion: Verify that the installed version of `pydantic` provides `BaseModel` (it does in all supported versions) and that there are no naming conflicts; reinstall or upgrade the package if necessary.
-
-🔴 **[ERROR]** Unresolved imported symbol: from pydantic import Field
-   - File: `src/vacancy_module/service.py`
-   - 💡 Suggestion: Make sure `Field` is available from `pydantic` (it is); if the IDE/static analyzer cannot resolve it, add the package to the environment or adjust the import path.
+🟡 **[WARNING]** Tests only check method existence with hasattr() (9 times) but never actually call the methods. Tests should invoke methods and verify behavior.
+   - File: `tests/vacancy_module/test_vacancy_service.py`
+   - 💡 Suggestion: Update the structural tests to call each method on a `VacancyServiceImpl` instance (using mocks for external API calls) and verify that they return expected types/values. Ensure that the singleton `get_instance` method returns the same object across calls.
