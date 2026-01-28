@@ -66,6 +66,18 @@ class ExtractedIssue(BaseModel):
     validator_issue: dict[str, Any]  # Original validator issue for context
 
 
+class ModuleNames(BaseModel):
+    """Module names extracted from specification."""
+    module_names: list[str] = Field(description="List of module names mentioned in the specification (e.g., ['screening_module', 'storage_module'])")
+    confidence: str = Field(description="Confidence level: 'high', 'medium', or 'low'")
+
+
+class MatchedModules(BaseModel):
+    """Module directories matched with code structure."""
+    matched_modules: list[str] = Field(description="List of module directory names that match the spec (e.g., ['screening_module', 'storage_module'])")
+    unmatched_spec_modules: list[str] = Field(default_factory=list, description="Module names from spec that couldn't be matched")
+
+
 class StructuredCodeReviewAgent:
     """Structured Workflow Code Review Agent.
 
@@ -108,8 +120,146 @@ class StructuredCodeReviewAgent:
             )
         return self._llm
 
-    def _discover_files(self, code_root: str) -> dict:
-        """Discover all Python files in the code root."""
+    def _invoke_structured_output(
+        self,
+        model: type[BaseModel],
+        prompt: str,
+    ) -> BaseModel:
+        """Invoke LLM and return validated Pydantic model output."""
+        structured_llm = self.llm.with_structured_output(model)
+        response = structured_llm.invoke(prompt)
+
+        if isinstance(response, dict):
+            return model.model_validate(response.get("parsed", response))
+        if isinstance(response, model):
+            return response
+        return model.model_validate(response)
+
+    def _extract_module_names_from_spec(self, spec_content: str) -> list[str]:
+        """Extract module names from specification using LLM structured output."""
+        prompt = f"""Analyze the following specification and extract the names of modules that this specification defines or references.
+
+Look for:
+- Module names mentioned in headers (e.g., "Модуль скрининга" → "screening_module")
+- Service/class names that indicate modules (e.g., "ScreeningService" → "screening_module")
+- Directory references or module paths
+- Any explicit module mentions
+
+Return ONLY the module directory names (e.g., "screening_module", "vacancy_module", "storage_module"), not the full descriptions.
+
+Specification:
+{spec_content[:4000]}  # Truncate if too long
+
+If no modules are clearly identified, return an empty list with "low" confidence."""
+        try:
+            module_data = self._invoke_structured_output(ModuleNames, prompt)
+        except Exception as e:
+            logger.warning(f"Failed to extract module names from spec: {e}")
+            return []
+
+        assert isinstance(module_data, ModuleNames)
+        self._log(
+            f"Extracted module names from spec: {module_data.module_names} "
+            f"(confidence: {module_data.confidence})"
+        )
+        return module_data.module_names
+
+    def _match_modules_with_code_structure(
+        self,
+        spec_module_names: list[str],
+        code_root: str
+    ) -> list[str]:
+        """Match module names from spec with actual directory structure using LLM.
+
+        Args:
+            spec_module_names: Module names extracted from spec
+            code_root: Root directory of the code
+
+        Returns:
+            List of matched module directory names (e.g., ['screening_module'])
+        """
+        if not spec_module_names:
+            return []
+
+        # Discover available module directories
+        root = Path(code_root)
+        available_modules = set()
+
+        # Look for src/*_module/ directories
+        src_dir = root / "src"
+        if src_dir.exists():
+            for item in src_dir.iterdir():
+                if item.is_dir() and item.name.endswith("_module"):
+                    available_modules.add(item.name)
+
+        # Look for tests/*_module/ directories
+        tests_dir = root / "tests"
+        if tests_dir.exists():
+            for item in tests_dir.iterdir():
+                if item.is_dir() and item.name.endswith("_module"):
+                    available_modules.add(item.name)
+
+        if not available_modules:
+            self._log("No module directories found in code structure")
+            return []
+
+        # Use LLM to match spec module names with actual directories
+        prompt = f"""Match the module names from the specification with the actual module directories found in the code structure.
+
+Specification module names (what the spec mentions):
+{json.dumps(spec_module_names, indent=2)}
+
+Available module directories in code:
+{json.dumps(sorted(available_modules), indent=2)}
+
+Your task:
+1. Match each specification module name to the corresponding directory name
+2. Consider variations (e.g., "screening" → "screening_module", "Модуль скрининга" → "screening_module")
+3. Consider partial matches (e.g., "storage" → "storage_module")
+4. Return ONLY the matched directory names that exist in the code
+
+If a spec module name clearly matches a directory (even with variations), include it in matched_modules."""
+        try:
+            matched_data = self._invoke_structured_output(MatchedModules, prompt)
+        except Exception as e:
+            logger.warning(f"Failed to match modules with code structure: {e}")
+            matched_data = None
+
+        if isinstance(matched_data, MatchedModules):
+            matched_modules = matched_data.matched_modules
+        else:
+            matched_modules = []
+
+        if not matched_modules:
+            for spec_name in spec_module_names:
+                normalized = spec_name.lower().replace(" ", "_")
+                if not normalized.endswith("_module"):
+                    normalized = f"{normalized}_module"
+                if normalized in available_modules:
+                    matched_modules.append(normalized)
+
+        # Validate that matched modules actually exist
+        validated_modules = [
+            m for m in matched_modules
+            if m in available_modules
+        ]
+
+        if validated_modules != matched_modules:
+            logger.warning(
+                f"LLM matched modules {matched_modules} but only {validated_modules} exist in code"
+            )
+
+        self._log(f"Matched modules: {validated_modules}")
+        return validated_modules
+
+    def _discover_files(self, code_root: str, module_names: list[str] | None = None) -> dict:
+        """Discover Python files in the code root, optionally filtered by module names.
+
+        Args:
+            code_root: Root directory to search
+            module_names: Optional list of module directory names to filter by
+                          (e.g., ['screening_module']). If None, discovers all files.
+        """
         root = Path(code_root)
         if not root.exists():
             return {"error": f"Directory not found: {code_root}", "files": []}
@@ -124,10 +274,25 @@ class StructuredCodeReviewAgent:
             if "__pycache__" in str(py_file):
                 continue
 
+            relative_path = str(py_file.relative_to(root))
+
+            # Filter by module names if provided
+            if module_names:
+                # Check if file belongs to any of the specified modules
+                belongs_to_module = False
+                for module_name in module_names:
+                    # Match src/{module_name}/ or tests/{module_name}/
+                    if f"src/{module_name}/" in relative_path or f"tests/{module_name}/" in relative_path:
+                        belongs_to_module = True
+                        break
+
+                if not belongs_to_module:
+                    continue
+
             file_info = {
                 "path": str(py_file),
                 "name": py_file.name,
-                "relative": str(py_file.relative_to(root)),
+                "relative": relative_path,
             }
 
             files["all_files"].append(file_info)
@@ -473,7 +638,10 @@ Respond with JSON:
                 file_path = issue.get("file") or result_file
                 if not file_path:
                     # Try to infer from validator name (e.g., "signatures_service.py" -> extract service.py)
-                    if validator_name.startswith("signatures_") or validator_name.startswith("code_quality_"):
+                    # Check file_path_mapping for validators that use it
+                    if validator_name.startswith("signatures_") or \
+                       validator_name.startswith("code_quality_") or \
+                       validator_name.startswith("test_quality_"):
                         # Check file_path_mapping
                         if hasattr(self, '_file_path_mapping') and validator_name in self._file_path_mapping:
                             file_path = self._file_path_mapping[validator_name]
@@ -545,101 +713,79 @@ Respond with JSON:
 
         return None
 
-    def _parse_llm_response_with_extracted_issues(
+    def _merge_llm_output_with_extracted_issues(
         self,
-        response: str,
+        llm_output: LLMReviewOutput,
         extracted_issues: list[ExtractedIssue],
     ) -> LLMReviewOutput:
-        """Parse LLM response and merge with deterministically extracted issues.
+        """Merge LLM output with deterministically extracted issues.
 
         The LLM only provides severity and suggestions. We merge these with
         the pre-extracted issues to ensure all issues are included.
         """
-        try:
-            # Try to extract JSON from the response
-            content = response.strip()
+        # Create a mapping from extracted issues to LLM issues
+        # Match by message (first 50 chars) and file_path
+        issue_map: dict[tuple[str, str], ReviewIssue] = {}
+        for llm_issue in llm_output.issues:
+            msg_key = llm_issue.message[:50]
+            file_key = llm_issue.file_path
+            issue_map[(msg_key, file_key)] = llm_issue
 
-            # Handle markdown code blocks
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
+        # Merge extracted issues with LLM output
+        merged_issues: list[ReviewIssue] = []
+        for extracted in extracted_issues:
+            msg_key = extracted.message[:50]
+            file_key = extracted.file_path
+            llm_issue = issue_map.get((msg_key, file_key))
 
-            data = json.loads(content)
-            llm_issues = data.get("issues", [])
-
-            # Create a mapping from extracted issues to LLM issues
-            # Match by message (first 50 chars) and file_path
-            issue_map = {}
-            for llm_issue in llm_issues:
-                msg_key = llm_issue.get("message", "")[:50]
-                file_key = llm_issue.get("file_path", "")
-                issue_map[(msg_key, file_key)] = llm_issue
-
-            # Merge extracted issues with LLM output
-            merged_issues = []
-            for extracted in extracted_issues:
-                msg_key = extracted.message[:50]
-                file_key = extracted.file_path
-                llm_issue = issue_map.get((msg_key, file_key))
-
-                if llm_issue:
-                    # Use LLM's severity and suggestion
-                    merged_issues.append(ReviewIssue(
-                        category=extracted.category,
-                        severity=llm_issue.get("severity", "warning"),
-                        file_path=extracted.file_path,
-                        line_number=extracted.line_number,
-                        message=extracted.message,
-                        suggestion=llm_issue.get("suggestion"),
-                    ))
-                else:
-                    # LLM didn't provide output for this issue, use defaults
-                    logger.warning(
-                        f"LLM didn't provide severity/suggestion for issue: "
-                        f"{extracted.category} in {extracted.file_path}"
-                    )
-                    merged_issues.append(ReviewIssue(
-                        category=extracted.category,
-                        severity="warning",  # Default severity
-                        file_path=extracted.file_path,
-                        line_number=extracted.line_number,
-                        message=extracted.message,
-                        suggestion=None,
-                    ))
-
-            # Ensure we have all extracted issues (defense in depth)
-            if len(merged_issues) != len(extracted_issues):
+            if llm_issue:
+                # Use LLM's severity and suggestion
+                merged_issues.append(ReviewIssue(
+                    category=extracted.category,
+                    severity=llm_issue.severity,
+                    file_path=extracted.file_path,
+                    line_number=extracted.line_number,
+                    message=extracted.message,
+                    suggestion=llm_issue.suggestion,
+                ))
+            else:
+                # LLM didn't provide output for this issue, use defaults
                 logger.warning(
-                    f"Issue count mismatch: extracted={len(extracted_issues)}, "
-                    f"merged={len(merged_issues)}. Using extracted issues."
+                    f"LLM didn't provide severity/suggestion for issue: "
+                    f"{extracted.category} in {extracted.file_path}"
                 )
-                # Rebuild from extracted issues if mismatch
-                merged_issues = [
-                    ReviewIssue(
-                        category=extracted.category,
-                        severity="warning",
-                        file_path=extracted.file_path,
-                        line_number=extracted.line_number,
-                        message=extracted.message,
-                        suggestion=None,
-                    )
-                    for extracted in extracted_issues
-                ]
+                merged_issues.append(ReviewIssue(
+                    category=extracted.category,
+                    severity="warning",  # Default severity
+                    file_path=extracted.file_path,
+                    line_number=extracted.line_number,
+                    message=extracted.message,
+                    suggestion=None,
+                ))
 
-            summary = data.get("summary", "Code review completed")
-            passed = data.get("passed", True)
-
-            return LLMReviewOutput(
-                issues=merged_issues,
-                summary=summary,
-                passed=passed,
+        # Ensure we have all extracted issues (defense in depth)
+        if len(merged_issues) != len(extracted_issues):
+            logger.warning(
+                f"Issue count mismatch: extracted={len(extracted_issues)}, "
+                f"merged={len(merged_issues)}. Using extracted issues."
             )
-        except Exception as e:
-            logger.warning(f"Failed to parse LLM response: {e}")
-            logger.debug(f"LLM response (first 500 chars): {response[:500]}")
-            # Return fallback output
-            return self._create_fallback_output(extracted_issues, str(e))
+            merged_issues = [
+                ReviewIssue(
+                    category=extracted.category,
+                    severity="warning",
+                    file_path=extracted.file_path,
+                    line_number=extracted.line_number,
+                    message=extracted.message,
+                    suggestion=None,
+                )
+                for extracted in extracted_issues
+            ]
+
+        return LLMReviewOutput(
+            issues=merged_issues,
+            summary=llm_output.summary,
+            passed=llm_output.passed,
+        )
 
     def _create_fallback_output(
         self,
@@ -675,109 +821,6 @@ Respond with JSON:
             summary=summary,
             passed=not has_errors,
         )
-
-    def _parse_llm_response(
-        self,
-        response: str,
-        validator_results: dict[str, Any] | None = None,
-    ) -> LLMReviewOutput:
-        """Parse the LLM response into structured output.
-
-        Args:
-            response: Raw LLM response string
-            validator_results: Optional validator results for fallback file_path extraction
-        """
-        validator_results = validator_results or {}
-
-        try:
-            # Try to extract JSON from the response
-            content = response.strip()
-
-            # Handle markdown code blocks
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-
-            data = json.loads(content)
-
-            # Sanitize issues: ensure file_path is never None
-            sanitized_issues = []
-            for i, issue in enumerate(data.get("issues", [])):
-                file_path = issue.get("file_path")
-
-                # If file_path is None or empty, try to extract from validator context
-                if not file_path:
-                    category = issue.get("category", "")
-                    message = issue.get("message", "")
-
-                    # Map category to likely validator patterns
-                    validator_patterns = {
-                        "signature_mismatch": ["signatures_"],
-                        "code_quality_issue": ["code_quality_"],
-                        "test_quality": ["test_quality_"],
-                        "pydantic_issue": ["pydantic_usage", "pydantic_"],
-                        "cross_file_issue": ["cross_file_usage", "cross_file_"],
-                        "structure_issue": ["project_structure"],
-                    }
-
-                    # Try to find matching validator by category
-                    prefixes = validator_patterns.get(category, [])
-                    for prefix in prefixes:
-                        for validator_name in validator_results.keys():
-                            if validator_name.startswith(prefix) or validator_name == prefix:
-                                file_path = self._extract_file_path_from_validator_context(
-                                    issue, validator_name, validator_results
-                                )
-                                if file_path:
-                                    break
-                        if file_path:
-                            break
-
-                    # If still not found, try all validators (fallback)
-                    if not file_path:
-                        for validator_name, result in validator_results.items():
-                            if isinstance(result, dict):
-                                # Check if this validator has a file at result level
-                                result_file = result.get("file")
-                                if result_file:
-                                    # Check if this validator's issues match this category
-                                    validator_issues = result.get("issues", [])
-                                    # Try to match by checking if message appears in validator issues
-                                    for v_issue in validator_issues:
-                                        v_msg = v_issue.get("message", "")
-                                        if message[:50] in v_msg or v_msg[:50] in message:
-                                            file_path = result_file
-                                            break
-                                    if file_path:
-                                        break
-
-                    # If still not found, use "unknown"
-                    if not file_path:
-                        logger.warning(
-                            f"Issue {i} missing file_path, category: {category}, "
-                            f"message: {message[:50]}... Using 'unknown' as fallback."
-                        )
-                        file_path = "unknown"
-
-                # Update issue with sanitized file_path
-                issue["file_path"] = file_path
-                sanitized_issues.append(issue)
-
-            # Replace issues with sanitized version
-            data["issues"] = sanitized_issues
-
-            return LLMReviewOutput(**data)
-        except Exception as e:
-            logger.warning(f"Failed to parse LLM response: {e}")
-            # Log the response for debugging (truncated)
-            logger.debug(f"LLM response (first 500 chars): {response[:500]}")
-            # Return a safe default
-            return LLMReviewOutput(
-                issues=[],
-                summary=f"Failed to parse review output: {e}",
-                passed=True
-            )
 
     def _normalize_file_path(self, file_path: str) -> str:
         """Normalize file path to be relative to code_root."""
@@ -877,15 +920,27 @@ Respond with JSON:
         coding_guidelines: str | None = None,
         modules_description: str | None = None,
         external_components_path: str | None = None,
+        module_names: list[str] | None = None,
     ) -> ReviewResult:
         """Run a structured code review.
 
         Workflow:
-        1. Discovery: Read spec and discover files
+        1. Discovery: Read spec and discover files (optionally filtered by module names)
         2. Validation: Run all validators in parallel (signatures, code quality,
            test quality, Pydantic usage, project structure)
         3. Analysis: Single LLM call to interpret results
         4. Report: Generate structured output
+
+        Args:
+            spec_path: Path to specification file
+            code_root: Root directory of code to review
+            component_docs: Optional component documentation
+            data_structures: Optional API data structures
+            coding_guidelines: Optional coding guidelines
+            modules_description: Optional modules description
+            external_components_path: Optional path to external components
+            module_names: Optional list of module directory names to filter by
+                         (e.g., ['screening_module']). If None, will extract from spec.
         """
         self._start_time = datetime.now()
         self._code_root = Path(code_root).resolve()  # Store for path normalization
@@ -893,11 +948,30 @@ Respond with JSON:
         logger.info(f"  Spec: {spec_path}")
         logger.info(f"  Code: {code_root}")
 
+        # Phase 0: Extract and match module names from spec
+        phase_start = datetime.now()
+        self._log("Phase 0: Module Name Extraction")
+        spec_content = self._read_file(spec_path)
+
+        if module_names is None:
+            # Extract module names from spec using LLM
+            spec_module_names = self._extract_module_names_from_spec(spec_content)
+            # Match with actual code structure
+            module_names = self._match_modules_with_code_structure(spec_module_names, code_root)
+            if module_names:
+                self._log(f"  Filtering review to modules: {module_names}")
+            else:
+                self._log("  No modules matched, reviewing all files")
+        else:
+            self._log(f"  Using provided module names: {module_names}")
+
+        module_extraction_time = (datetime.now() - phase_start).total_seconds()
+        self._log(f"  Module extraction completed in {module_extraction_time:.2f}s")
+
         # Phase 1: Discovery
         phase_start = datetime.now()
         self._log("Phase 1: Discovery")
-        spec_content = self._read_file(spec_path)
-        files = self._discover_files(code_root)
+        files = self._discover_files(code_root, module_names=module_names)
         file_contents = self._read_all_files(files)
         discovery_time = (datetime.now() - phase_start).total_seconds()
 
@@ -956,15 +1030,14 @@ Respond with JSON:
         )
 
         try:
-            response = self.llm.invoke(prompt)
-            # Extract string content from response (handles both str and list formats)
-            content = response.content
-            content = " ".join(str(item) for item in content) if isinstance(content, list) else str(content)
-            # Parse LLM response and merge with extracted issues
-            llm_output = self._parse_llm_response_with_extracted_issues(content, extracted_issues)
+            llm_structured = self._invoke_structured_output(LLMReviewOutput, prompt)
+            assert isinstance(llm_structured, LLMReviewOutput)
+            llm_output = self._merge_llm_output_with_extracted_issues(
+                llm_structured,
+                extracted_issues,
+            )
         except Exception as e:
             logger.error(f"LLM analysis failed: {e}")
-            # Fallback: use extracted issues with default severity
             llm_output = self._create_fallback_output(extracted_issues, str(e))
 
         # Phase 4: Report

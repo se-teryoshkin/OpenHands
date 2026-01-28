@@ -257,9 +257,12 @@ def run_review_example(
                 "coding_guidelines": coding_guidelines,
                 "modules_description": modules_description,
             }
-            # Only StructuredCodeReviewAgent supports external_components_path
-            if not use_react and external_components:
-                review_kwargs["external_components_path"] = external_components
+            # Only StructuredCodeReviewAgent supports external_components_path and module_names
+            if not use_react:
+                if external_components:
+                    review_kwargs["external_components_path"] = external_components
+                # module_names=None means auto-extract from spec (handled by agent)
+                review_kwargs["module_names"] = None
 
             result = agent.review(**review_kwargs)
         except Exception as e:

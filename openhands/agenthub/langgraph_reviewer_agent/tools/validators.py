@@ -488,6 +488,7 @@ def validate_test_quality_tool(
 
         results = {
             "valid": len(issues) == 0,
+            "file": test_file,  # Store file path for fallback extraction
             "test_count": len(test_functions),
             "test_functions": test_functions,
             "assertion_count": assertions,
