@@ -69,31 +69,40 @@ def setup_logging(debug: bool = False):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
-def extract_code(zip_path: Path, extract_to: Path) -> Path:
-    """Extract the generated code from a zip file.
+def extract_code(code_path: Path, extract_to: Path) -> Path:
+    """Extract or copy the generated code from a zip file or directory.
 
     Args:
-        zip_path: Path to the zip file.
-        extract_to: Directory to extract to.
+        code_path: Path to the zip file or directory.
+        extract_to: Directory to extract/copy to.
 
     Returns:
-        Path to the extracted code root.
+        Path to the extracted/copied code root.
     """
-    print(f"📦 Extracting {zip_path.name}...")
+    import shutil
 
-    with zipfile.ZipFile(zip_path, 'r') as zf:
-        zf.extractall(extract_to)
-
-    # List extracted contents
-    contents = list(extract_to.iterdir())
-    print(f"   Extracted {len(list(extract_to.rglob('*')))} files")
-
-    return extract_to
+    if code_path.is_dir():
+        print(f"📁 Copying directory {code_path.name}...")
+        # Copy the entire directory to extract_to
+        dest_path = extract_to / code_path.name
+        shutil.copytree(code_path, dest_path, dirs_exist_ok=True)
+        file_count = len(list(dest_path.rglob('*')))
+        print(f"   Copied {file_count} files")
+        return dest_path
+    elif code_path.suffix == '.zip':
+        print(f"📦 Extracting {code_path.name}...")
+        with zipfile.ZipFile(code_path, 'r') as zf:
+            zf.extractall(extract_to)
+        file_count = len(list(extract_to.rglob('*')))
+        print(f"   Extracted {file_count} files")
+        return extract_to
+    else:
+        raise ValueError(f"Unsupported file type: {code_path}. Expected a directory or .zip file.")
 
 
 def run_review_example(
     spec_path: Path,
-    code_zip_path: Path,
+    code_zip_path: Path,  # Can be zip file or directory
     debug: bool = False,
     output_file: Path | None = None,
     data_structures_path: Path | None = None,
@@ -163,7 +172,7 @@ def run_review_example(
     with tempfile.TemporaryDirectory(prefix="code_review_") as temp_dir:
         temp_path = Path(temp_dir)
 
-        # Extract the code
+        # Extract or copy the code
         code_root = extract_code(code_zip_path, temp_path)
 
         # Show what we're reviewing
@@ -312,8 +321,8 @@ def main():
     parser.add_argument(
         "--code",
         type=Path,
-        default=PROJECT_ROOT / "test_data" / "module_M4" / "M4_v1.1_run3_before_CR_1.zip",
-        help="Path to generated code zip (default: test_data/module_M4/M4_v1.1_run3_before_CR_1.zip)",
+        default=PROJECT_ROOT / "test_data" / "module_M4" / "M4_v1.1_run3_after_tests_after_CR_2",
+        help="Path to generated code (zip file or directory) (default: test_data/module_M4/M4_v1.1_run3_after_tests_after_CR_2)",
     )
     parser.add_argument(
         "--output", "-o",
@@ -362,7 +371,7 @@ def main():
         sys.exit(1)
 
     if not args.code.exists():
-        print(f"❌ Code zip file not found: {args.code}")
+        print(f"❌ Code file or directory not found: {args.code}")
         sys.exit(1)
 
     # Run the review
