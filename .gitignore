@@ -261,6 +261,9 @@ test-results
 .eval_sessions
 .misc
 
+# code review agent stability reports
+examples/code_review_agent/stability_reports/
+
 # artifacts
 tmp_data
 test_data

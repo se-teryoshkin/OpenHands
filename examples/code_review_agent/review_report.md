@@ -1,11 +1,11 @@
 # Code Review
-**Status:** ✅ PASSED
+**Status:** ❌ FAILED
 
-**Summary:** The review identified several test quality warnings (tests only check for method existence), a code‑quality issue in example_usage.py, a duplicated Pydantic model, and multiple cross‑file usage warnings related to undefined attributes and incorrect Pydantic method calls.
+**Summary:** The review identified missing method implementations, broad exception handling, insufficient test coverage, duplicated Pydantic models, and several questionable attribute accesses. Critical signature mismatches must be fixed; other issues are warnings.
 
 **Statistics:**
-- 🔴 Errors: 0
-- 🟡 Warnings: 13
+- 🔴 Errors: 3
+- 🟡 Warnings: 15
 - 🔵 Info: 0
 
 **Files Reviewed:**
@@ -43,68 +43,92 @@
 
 ## Issues
 
-### Test Quality
+### Signature Mismatch
 
-🟡 **[WARNING]** Tests only check method existence with hasattr() (5 times) but never actually call the methods. Tests should invoke methods and verify behavior.
-   - File: `tests/vacancy_module/test_functional_works.py`
-   - 💡 Suggestion: Rewrite the tests to call the actual methods, provide appropriate inputs, and assert expected outputs or side‑effects instead of only checking for attribute existence.
+🔴 **[ERROR]** Method 'start_screening' from spec not implemented
+   - File: `src/chat_module/service.py`
+   - 💡 Suggestion: Implement the `start_screening` method in `ScreeningService` according to the specification, handling chat and search existence checks and publishing the task via `RedisScreeningTasksPublisher`.
 
-🟡 **[WARNING]** Tests only check method existence with hasattr() (7 times) but never actually call the methods. Tests should invoke methods and verify behavior.
-   - File: `tests/supervisor_module/test_supervisor_service.py`
-   - 💡 Suggestion: Update the supervisor service tests to execute the service methods, mock external dependencies if needed, and assert the returned results and state changes.
+🔴 **[ERROR]** Method 'get_screening_status' from spec not implemented
+   - File: `src/chat_module/service.py`
+   - 💡 Suggestion: Add the `get_screening_status` method to the service, delegating to `RedisScreeningTasksPublisher` to retrieve the current task status.
 
-🟡 **[WARNING]** Tests only check method existence with hasattr() (2 times) but never actually call the methods. Tests should invoke methods and verify behavior.
-   - File: `tests/screening_module/test_screening_service.py`
-   - 💡 Suggestion: Implement functional tests for the screening service that create a task, poll its status, and validate the final ScreeningResultResponse.
-
-🟡 **[WARNING]** Tests only check method existence with hasattr() (4 times) but never actually call the methods. Tests should invoke methods and verify behavior.
-   - File: `tests/supervisor_module/test_tool_integration.py`
-   - 💡 Suggestion: Add real integration tests that run the tool chain, feed sample inputs, and assert that the expected tool calls and results are produced.
-
-🟡 **[WARNING]** Tests only check method existence with hasattr() (4 times) but never actually call the methods. Tests should invoke methods and verify behavior.
-   - File: `tests/supervisor_module/test_singleton_pattern.py`
-   - 💡 Suggestion: Create tests that instantiate the singleton, verify that multiple calls return the same instance, and that its methods behave correctly.
-
-🟡 **[WARNING]** Tests only check method existence with hasattr() (6 times) but never actually call the methods. Tests should invoke methods and verify behavior.
-   - File: `tests/chat_module/test_chat_service_comprehensive.py`
-   - 💡 Suggestion: Develop comprehensive chat‑service tests that simulate chat creation, message handling, and interaction with the supervisor, asserting expected state transitions.
+🔴 **[ERROR]** Method 'wait_for_screening' from spec not implemented
+   - File: `src/chat_module/service.py`
+   - 💡 Suggestion: Implement the `wait_for_screening` method with default timeout of 20 seconds, polling every second, and map `TaskStatus` to `ScreeningResultResponse` using the described defaults.
 
 ### Code Quality Issue
 
 🟡 **[WARNING]** 'except Exception:' without re-raise suppresses all errors. Either handle specific exceptions or re-raise.
+   - File: `src/screening_module/service.py`
+   - Line: 246
+   - 💡 Suggestion: Catch specific exception types or, after logging/handling, re‑raise the exception to avoid silently swallowing errors.
+
+🟡 **[WARNING]** 'except Exception:' without re-raise suppresses all errors. Either handle specific exceptions or re-raise.
+   - File: `src/screening_module/service.py`
+   - Line: 221
+   - 💡 Suggestion: Replace the bare `except Exception:` with targeted exception handling or re‑raise after any necessary cleanup.
+
+🟡 **[WARNING]** 'except Exception:' without re-raise suppresses all errors. Either handle specific exceptions or re-raise.
    - File: `.downloads/example_usage.py`
    - Line: 55
-   - 💡 Suggestion: Catch specific exception types or, after logging, re‑raise the caught exception to avoid silently swallowing errors.
+   - 💡 Suggestion: Handle only expected exception types or re‑raise the caught exception after logging to avoid hiding bugs.
+
+### Test Quality
+
+🟡 **[WARNING]** Tests only check method existence with hasattr() (4 times) but never actually call the methods. Tests should invoke methods and verify behavior.
+   - File: `tests/supervisor_module/test_tool_integration.py`
+   - 💡 Suggestion: Rewrite the tests to call the actual methods, provide necessary fixtures/mocks, and assert expected outcomes instead of merely checking for attribute presence.
+
+🟡 **[WARNING]** Tests only check method existence with hasattr() (4 times) but never actually call the methods. Tests should invoke methods and verify behavior.
+   - File: `tests/supervisor_module/test_singleton_pattern.py`
+   - 💡 Suggestion: Update the singleton pattern tests to instantiate the service, verify that only one instance exists, and test its functional methods.
+
+🟡 **[WARNING]** Tests only check method existence with hasattr() (2 times) but never actually call the methods. Tests should invoke methods and verify behavior.
+   - File: `tests/screening_module/test_screening_service.py`
+   - 💡 Suggestion: Enhance the screening service tests to call `start_screening`, `get_screening_status`, and `wait_for_screening` with mock dependencies and assert correct results.
+
+🟡 **[WARNING]** Tests only check method existence with hasattr() (5 times) but never actually call the methods. Tests should invoke methods and verify behavior.
+   - File: `tests/vacancy_module/test_functional_works.py`
+   - 💡 Suggestion: Convert the placeholder tests into functional integration tests that exercise the full workflow.
+
+🟡 **[WARNING]** Tests only check method existence with hasattr() (7 times) but never actually call the methods. Tests should invoke methods and verify behavior.
+   - File: `tests/supervisor_module/test_supervisor_service.py`
+   - 💡 Suggestion: Implement real test cases for the supervisor service, invoking its public methods and checking the responses.
+
+🟡 **[WARNING]** Tests only check method existence with hasattr() (6 times) but never actually call the methods. Tests should invoke methods and verify behavior.
+   - File: `tests/chat_module/test_chat_service_comprehensive.py`
+   - 💡 Suggestion: Write comprehensive tests for the chat service that perform actual CRUD operations and validate state changes.
 
 ### Pydantic Issue
 
 🟡 **[WARNING]** Model 'IdNameObject' is defined in multiple files: src/storage_module/models.py, src/vacancy_module/service.py. Consider using a shared definition.
    - File: `src/storage_module/models.py`
-   - 💡 Suggestion: Move IdNameObject to a common module (e.g., src/common/models.py) and import it from both locations to avoid duplication.
+   - 💡 Suggestion: Extract `IdNameObject` into a common module (e.g., `src/common/models.py`) and import it from both locations to avoid duplication.
 
 ### Cross File Issue
 
 🟡 **[WARNING]** Possibly invalid member access 'self.redis_client' (could not resolve 'redis_client' on inferred project symbol)
    - File: `src/storage_module/service.py`
    - Line: 145
-   - 💡 Suggestion: Ensure RedisStorageService defines an attribute named redis_client (e.g., in __init__) or rename the usage to the correct attribute.
+   - 💡 Suggestion: Ensure that `RedisStorageService` defines `self.redis_client` (e.g., in `__init__`) or rename the attribute to the correct one.
 
 🟡 **[WARNING]** Possibly invalid member access 'ChatResponse.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)
    - File: `src/storage_module/service.py`
    - Line: 189
-   - 💡 Suggestion: Replace model_validate_json with the correct Pydantic method, such as ChatResponse.parse_raw or ChatResponse.model_validate.
+   - 💡 Suggestion: Replace `ChatResponse.model_validate_json` with the correct Pydantic method such as `ChatResponse.model_validate` or `ChatResponse.parse_raw`.
 
 🟡 **[WARNING]** Possibly invalid member access 'SearchDetailsResponse.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)
    - File: `src/storage_module/service.py`
    - Line: 315
-   - 💡 Suggestion: Use SearchDetailsResponse.parse_raw or SearchDetailsResponse.model_validate instead of the non‑existent model_validate_json.
+   - 💡 Suggestion: Use the appropriate Pydantic validation method (`parse_raw` or `model_validate`) instead of the non‑existent `model_validate_json`.
 
 🟡 **[WARNING]** Possibly invalid member access 'ScreeningTaskInfo.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)
    - File: `src/storage_module/service.py`
    - Line: 373
-   - 💡 Suggestion: Replace with ScreeningTaskInfo.parse_raw or ScreeningTaskInfo.model_validate.
+   - 💡 Suggestion: Replace the call with a valid Pydantic method such as `ScreeningTaskInfo.parse_raw`.
 
 🟡 **[WARNING]** Possibly invalid member access 'ScreeningTaskInfo.model_validate_json' (could not resolve 'model_validate_json' on inferred project symbol)
    - File: `src/storage_module/service.py`
    - Line: 386
-   - 💡 Suggestion: Same as above – use the appropriate Pydantic parsing method.
+   - 💡 Suggestion: Use a correct Pydantic parsing method (`parse_raw`/`model_validate`) instead of the undefined `model_validate_json`.
