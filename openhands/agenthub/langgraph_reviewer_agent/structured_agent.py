@@ -73,6 +73,9 @@ class StructuredCodeReviewAgent:
         self.verbose = verbose or self.config.verbose
         self._llm: ChatOpenAI | None = None
         self._start_time: datetime | None = None
+        self._code_root: Path | None = None
+        self._file_path_mapping: dict[str, str] = {}
+        self._files_reviewed: list[str] = []
 
     def _log(self, message: str, level: str = "info"):
         """Log a message if verbose mode is enabled."""
@@ -427,6 +430,55 @@ Respond with JSON:
                 passed=True
             )
 
+    def _normalize_file_path(self, file_path: str) -> str:
+        """Normalize file path to be relative to code_root."""
+        if self._code_root is None:
+            return file_path
+
+        # First, check if this is a simplified validator key (like "signatures_service.py")
+        # and map it to the actual file path
+        if hasattr(self, '_file_path_mapping') and file_path in self._file_path_mapping:
+            file_path = self._file_path_mapping[file_path]
+
+        try:
+            path = Path(file_path)
+            # If it's just a filename (no directory), try to find it in files_reviewed
+            if path.parent == Path(".") or (not path.parent.name and path.name):
+                # It's just a filename like "service.py"
+                # Try to find it in the file_contents or files_reviewed
+                if hasattr(self, '_files_reviewed') and self._files_reviewed:
+                    for reviewed_path in self._files_reviewed:
+                        if Path(reviewed_path).name == path.name:
+                            # Found matching file, use this path for normalization
+                            file_path = reviewed_path
+                            break
+
+            path = Path(file_path)
+            # If it's an absolute path, convert to relative
+            if path.is_absolute():
+                try:
+                    # Ensure both paths are resolved for comparison
+                    abs_path = path.resolve()
+                    abs_code_root = self._code_root.resolve()
+                    relative_path = abs_path.relative_to(abs_code_root)
+                    return str(relative_path)
+                except ValueError as e:
+                    # Path is outside code_root, return as-is
+                    logger.debug(f"Path {file_path} is outside code_root {self._code_root}: {e}")
+                    return str(path)
+            else:
+                # Relative path - if it exists relative to code_root, return as-is
+                # Otherwise try to resolve it
+                full_path = self._code_root / path
+                if full_path.exists():
+                    return str(path)
+                # If not found, return as-is (might be a relative path)
+                return str(path)
+        except Exception as e:
+            # If anything fails, return original
+            logger.debug(f"Failed to normalize path {file_path}: {e}")
+            return file_path
+
     def _convert_to_review_result(
         self,
         llm_output: LLMReviewOutput,
@@ -446,10 +498,13 @@ Respond with JSON:
             except ValueError:
                 severity = IssueSeverity.WARNING
 
+            # Normalize file path to be relative to code_root
+            normalized_path = self._normalize_file_path(issue.file_path)
+
             comments.append(ReviewComment(
                 category=category,
                 severity=severity,
-                file_path=issue.file_path,
+                file_path=normalized_path,
                 line_number=issue.line_number,
                 message=issue.message,
                 suggestion=issue.suggestion,
@@ -482,6 +537,7 @@ Respond with JSON:
         4. Report: Generate structured output
         """
         self._start_time = datetime.now()
+        self._code_root = Path(code_root).resolve()  # Store for path normalization
         logger.info("Starting structured code review")
         logger.info(f"  Spec: {spec_path}")
         logger.info(f"  Code: {code_root}")
@@ -510,6 +566,19 @@ Respond with JSON:
             external_components_path=external_components_path or "",
         )
         validation_time = (datetime.now() - phase_start).total_seconds()
+
+        # Build a mapping from simplified validator keys to actual file paths
+        # Validator keys are like "signatures_service.py", "code_quality_service.py", etc.
+        self._file_path_mapping = {}
+        for file_info in files.get("source_files", []):
+            file_name = file_info["name"]
+            file_path = file_info["path"]
+            self._file_path_mapping[f"signatures_{file_name}"] = file_path
+            self._file_path_mapping[f"code_quality_{file_name}"] = file_path
+        for file_info in files.get("test_files", []):
+            file_name = file_info["name"]
+            file_path = file_info["path"]
+            self._file_path_mapping[f"test_quality_{file_name}"] = file_path
 
         # Count issues from validators
         total_validator_issues = 0
@@ -544,9 +613,15 @@ Respond with JSON:
 
         # Phase 4: Report
         self._log("Phase 4: Report Generation")
+        # Store files_reviewed for path normalization
+        self._files_reviewed = list(file_contents.keys())
+        # Normalize files_reviewed paths to be relative to code_root
+        normalized_files_reviewed = [
+            self._normalize_file_path(path) for path in self._files_reviewed
+        ]
         result = self._convert_to_review_result(
             llm_output=llm_output,
-            files_reviewed=list(file_contents.keys()),
+            files_reviewed=normalized_files_reviewed,
         )
 
         # Log completion

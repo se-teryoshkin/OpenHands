@@ -9,6 +9,15 @@ import jedi
 
 from langchain_core.tools import tool
 
+# Try to import TOML parser (Python 3.11+ has tomllib built-in)
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    try:
+        import tomli as tomllib  # type: ignore  # Fallback for older Python (optional dependency)
+    except ImportError:
+        tomllib = None  # No TOML support
+
 
 def _parse_signature_from_spec(spec_text: str) -> list[dict]:
     """Parse method signatures from specification text."""
@@ -1563,6 +1572,110 @@ def _iter_python_files(code_root: str) -> list[Path]:
     return files
 
 
+def _extract_packages_from_poetry_lock(code_root: Path) -> set[str]:
+    """Extract package names from poetry.lock if it exists.
+
+    Returns a set of package names (e.g., {'pydantic', 'typing', ...}).
+    """
+    if tomllib is None:
+        return set()
+
+    lock_file = code_root / "poetry.lock"
+    if not lock_file.exists():
+        return set()
+
+    try:
+        with open(lock_file, 'rb') as f:
+            data = tomllib.load(f)
+
+        packages = set()
+        if 'package' in data:
+            for pkg in data['package']:
+                if 'name' in pkg:
+                    # Normalize package names: replace dashes with dots for comparison
+                    # e.g., "appfactory-components" -> "appfactory.components"
+                    pkg_name = pkg['name'].replace('-', '.')
+                    packages.add(pkg_name)
+                    # Also add the original name in case imports use dashes
+                    packages.add(pkg['name'])
+        return packages
+    except Exception:
+        return set()
+
+
+def _extract_packages_from_pyproject(code_root: Path) -> set[str]:
+    """Extract direct dependencies from pyproject.toml if it exists.
+
+    Returns a set of package names.
+    """
+    if tomllib is None:
+        return set()
+
+    pyproject_file = code_root / "pyproject.toml"
+    if not pyproject_file.exists():
+        return set()
+
+    try:
+        with open(pyproject_file, 'rb') as f:
+            data = tomllib.load(f)
+
+        packages = set()
+        # Check for Poetry-style dependencies
+        if 'tool' in data and 'poetry' in data['tool']:
+            poetry_data = data['tool']['poetry']
+            if 'dependencies' in poetry_data:
+                for dep_name in poetry_data['dependencies'].keys():
+                    if dep_name != 'python':
+                        packages.add(dep_name.replace('-', '.'))
+                        packages.add(dep_name)
+
+        # Check for PEP 621-style dependencies (project.dependencies)
+        if 'project' in data and 'dependencies' in data['project']:
+            for dep in data['project']['dependencies']:
+                # Dependencies can be strings like "pydantic>=2.0" or dicts
+                if isinstance(dep, str):
+                    # Extract package name (before version specifiers)
+                    pkg_name = dep.split('>=')[0].split('==')[0].split('~=')[0].split('!=')[0].split('@')[0].strip()
+                    if pkg_name:
+                        packages.add(pkg_name.replace('-', '.'))
+                        packages.add(pkg_name)
+
+        return packages
+    except Exception:
+        return set()
+
+
+def _extract_known_packages(code_root: Path) -> set[str]:
+    """Extract known package names from dependency files.
+
+    Checks poetry.lock (preferred, includes transitive deps) and pyproject.toml (fallback).
+    Also includes common stdlib packages.
+    """
+    packages = set()
+
+    # Try poetry.lock first (most complete)
+    packages.update(_extract_packages_from_poetry_lock(code_root))
+
+    # Fallback to pyproject.toml if poetry.lock not found
+    if not packages:
+        packages.update(_extract_packages_from_pyproject(code_root))
+
+    # Add common stdlib packages as fallback
+    stdlib_packages = {
+        'typing', 'dataclasses', 'collections', 'pathlib', 'os', 'sys', 'json',
+        're', 'datetime', 'time', 'functools', 'itertools', 'operator', 'enum',
+        'abc', 'contextlib', 'copy', 'hashlib', 'io', 'logging', 'math', 'random',
+        'string', 'struct', 'threading', 'unittest', 'urllib', 'warnings', 'weakref',
+        'asyncio', 'concurrent', 'multiprocessing', 'queue', 'select', 'socket',
+        'ssl', 'subprocess', 'tempfile', 'traceback', 'uuid', 'xml', 'zipfile',
+        'argparse', 'configparser', 'csv', 'email', 'html', 'http', 'sqlite3',
+        'base64', 'binascii', 'codecs', 'decimal', 'fractions', 'statistics',
+    }
+    packages.update(stdlib_packages)
+
+    return packages
+
+
 @tool
 def validate_cross_file_usage_tool(
     code_root: str,
@@ -1609,6 +1722,9 @@ def validate_cross_file_usage_tool(
 
         project = jedi.Project(path=str(root), sys_path=sys_path)
 
+        # Extract known packages from dependency files (poetry.lock, pyproject.toml)
+        known_packages = _extract_known_packages(root)
+
         files = _iter_python_files(code_root)
         if not include_tests:
             files = [p for p in files if "test" not in p.name.lower()]
@@ -1616,6 +1732,15 @@ def validate_cross_file_usage_tool(
         issues: list[dict[str, Any]] = []
         infer_calls = 0
         analyzed_files = 0
+
+        def _is_known_package(module_name: str) -> bool:
+            """Check if an import is from a known dependency package."""
+            if not module_name:
+                return False
+            # Extract top-level module name (first part before any dots)
+            top_level = module_name.split('.')[0]
+            # Check if it's in known packages (handle both dash and dot variants)
+            return top_level in known_packages or top_level.replace('-', '.') in known_packages
 
         def _is_external_component_import(module_name: str) -> bool:
             """Check if an import is from external components (should be ignored)."""
@@ -1700,6 +1825,10 @@ def validate_cross_file_usage_tool(
                 elif isinstance(node, ast.ImportFrom):
                     line = getattr(node, "lineno", None) or 1
                     base_col = getattr(node, "col_offset", 0)
+
+                    # Skip known dependency packages (from poetry.lock/pyproject.toml)
+                    if node.module and _is_known_package(node.module):
+                        continue
 
                     # Skip external component imports (they're trusted, not validated)
                     if node.module and _is_external_component_import(node.module):
