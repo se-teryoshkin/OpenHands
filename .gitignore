@@ -263,6 +263,9 @@ test-results
 
 # code review agent stability reports
 examples/code_review_agent/stability_reports/
+examples/code_review_agent/OPTION3_IMPLEMENTATION_SUMMARY.md
+examples/code_review_agent/review_report.md
+examples/code_review_agent/review_report.json
 
 # artifacts
 tmp_data
