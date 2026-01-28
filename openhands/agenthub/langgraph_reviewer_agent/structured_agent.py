@@ -331,9 +331,27 @@ class StructuredCodeReviewAgent:
                     validation_summary.append(f"**{name}**: Error - {error}")
                 elif issues:
                     validation_summary.append(f"**{name}**: {len(issues)} issues found")
+                    # Get file path from result level (for validators that store it there)
+                    result_file = result.get("file", "")
                     for issue in issues[:5]:  # Limit to 5 issues per validator
                         msg = issue.get("message", str(issue))[:200]
-                        validation_summary.append(f"  - {msg}")
+                        # Include file path and line number if available
+                        # Some validators store file at result level (code_quality, signatures), others at issue level (cross_file)
+                        file_path = issue.get("file") or result_file
+                        line_num = issue.get("line")
+                        # Format: File: path, Line: number, Message: message
+                        # This format makes it easy for LLM to extract
+                        # IMPORTANT: Always include File: even if at result level
+                        parts = []
+                        if file_path:
+                            parts.append(f"File: {file_path}")
+                        elif result_file:
+                            # Fallback: use result-level file
+                            parts.append(f"File: {result_file}")
+                        if line_num is not None:
+                            parts.append(f"Line: {line_num}")
+                        parts.append(f"Message: {msg}")
+                        validation_summary.append(f"  - {', '.join(parts)}")
                 else:
                     validation_summary.append(f"**{name}**: ✓ No issues")
 
@@ -372,10 +390,42 @@ class StructuredCodeReviewAgent:
 For each issue ALREADY found by validators, convert it to this format:
 1. **category**: One of: signature_mismatch, test_quality, code_quality_issue, pydantic_issue, structure_issue, cross_file_issue, general
 2. **severity**: error (must fix), warning (should fix), info (suggestion)
-3. **file_path**: The file where the issue is located (from validator output)
-4. **line_number**: Line number if reported by validator (null if not)
-5. **message**: The issue message from the validator
+3. **file_path**: REQUIRED - The file where the issue is located. Extract using these methods in order:
+   - First, check if the validator output shows "File: path" in the issue line
+   - If not, check if the issue has a "file" field (e.g., issue["file"])
+   - If still not found, check the validator result level - some validators store file at result["file"]
+     * For `signatures_*` validators: file is at result level (the impl_file parameter)
+     * For `code_quality_*` validators: file is at result level (the file_path parameter)
+     * For `cross_file_usage` validator: file is in each issue["file"]
+   - If absolutely cannot find file_path, use "unknown" (but this should be rare)
+4. **line_number**: Extract the line number from "Line:" in validator output, or from issue["line"] field. Use null only if no line number is provided.
+5. **message**: The issue message from the validator (extract from "Message:" or issue["message"])
 6. **suggestion**: How to fix it
+
+**CRITICAL: file_path is REQUIRED for every issue. Never use null. Always extract it from the validator output using the methods above.**
+
+**EXAMPLES:**
+
+Example 1 - Issue with file at result level:
+```
+Validator output: **code_quality_service.py**: 2 issues found
+  - File: src/service.py, Line: 45, Message: 'except Exception:' without re-raise...
+```
+→ Extract: `file_path: "src/service.py"` (from "File:" in the line)
+
+Example 2 - Issue with file in issue object:
+```
+Validator output: **cross_file_usage**: 1 issue found
+  - File: src/module/file.py, Line: 123, Message: Unresolved import...
+```
+→ Extract: `file_path: "src/module/file.py"` (from "File:" in the line)
+
+Example 3 - Signature validator (file at result level):
+```
+Validator output: **signatures_service.py**: 1 issue found
+  - Message: Method 'create_item' from spec not implemented
+```
+→ Extract: `file_path: <impl_file from signatures_service.py result>` (check result["file"])
 
 **CATEGORY MAPPING RULES:**
 - Issues from `cross_file_usage` validator → use category `cross_file_issue`
@@ -395,7 +445,7 @@ For each issue ALREADY found by validators, convert it to this format:
 - Be CONSERVATIVE - when in doubt, don't report
 - Aim for HIGH PRECISION (fewer false positives)
 
-Expected output: 3-8 issues maximum. If validators found no issues, report empty list.
+Expected output: report all found issues from validators. If validators found no issues, report empty list.
 
 Respond with JSON:
 {
@@ -407,8 +457,64 @@ Respond with JSON:
 
         return prompt
 
-    def _parse_llm_response(self, response: str) -> LLMReviewOutput:
-        """Parse the LLM response into structured output."""
+    def _extract_file_path_from_validator_context(
+        self,
+        issue: dict,
+        validator_name: str,
+        validator_results: dict[str, Any],
+    ) -> str | None:
+        """Extract file_path from validator context when missing from issue.
+
+        Some validators store file at result level, not issue level.
+        This method attempts to find the file_path by checking:
+        1. Validator result-level "file" field
+        2. Validator name patterns (e.g., "signatures_service.py" -> check signatures validator)
+        """
+        # Try to get file from validator result
+        if validator_name in validator_results:
+            result = validator_results[validator_name]
+            if isinstance(result, dict):
+                # Check result-level file
+                file_path = result.get("file")
+                if file_path:
+                    return file_path
+
+        # Try to infer validator from issue category or validator name pattern
+        # For signatures validator: pattern is "signatures_<filename>"
+        if validator_name.startswith("signatures_"):
+            # Extract filename from validator name
+            filename = validator_name.replace("signatures_", "")
+            if filename in validator_results:
+                result = validator_results[validator_name]
+                if isinstance(result, dict):
+                    file_path = result.get("file")
+                    if file_path:
+                        return file_path
+
+        # For code_quality validator: pattern is "code_quality_<filename>"
+        if validator_name.startswith("code_quality_"):
+            if validator_name in validator_results:
+                result = validator_results[validator_name]
+                if isinstance(result, dict):
+                    file_path = result.get("file")
+                    if file_path:
+                        return file_path
+
+        return None
+
+    def _parse_llm_response(
+        self,
+        response: str,
+        validator_results: dict[str, Any] | None = None,
+    ) -> LLMReviewOutput:
+        """Parse the LLM response into structured output.
+
+        Args:
+            response: Raw LLM response string
+            validator_results: Optional validator results for fallback file_path extraction
+        """
+        validator_results = validator_results or {}
+
         try:
             # Try to extract JSON from the response
             content = response.strip()
@@ -420,9 +526,78 @@ Respond with JSON:
                 content = content.split("```")[1].split("```")[0]
 
             data = json.loads(content)
+
+            # Sanitize issues: ensure file_path is never None
+            sanitized_issues = []
+            for i, issue in enumerate(data.get("issues", [])):
+                file_path = issue.get("file_path")
+
+                # If file_path is None or empty, try to extract from validator context
+                if not file_path:
+                    category = issue.get("category", "")
+                    message = issue.get("message", "")
+
+                    # Map category to likely validator patterns
+                    validator_patterns = {
+                        "signature_mismatch": ["signatures_"],
+                        "code_quality_issue": ["code_quality_"],
+                        "test_quality": ["test_quality_"],
+                        "pydantic_issue": ["pydantic_usage", "pydantic_"],
+                        "cross_file_issue": ["cross_file_usage", "cross_file_"],
+                        "structure_issue": ["project_structure"],
+                    }
+
+                    # Try to find matching validator by category
+                    prefixes = validator_patterns.get(category, [])
+                    for prefix in prefixes:
+                        for validator_name in validator_results.keys():
+                            if validator_name.startswith(prefix) or validator_name == prefix:
+                                file_path = self._extract_file_path_from_validator_context(
+                                    issue, validator_name, validator_results
+                                )
+                                if file_path:
+                                    break
+                        if file_path:
+                            break
+
+                    # If still not found, try all validators (fallback)
+                    if not file_path:
+                        for validator_name, result in validator_results.items():
+                            if isinstance(result, dict):
+                                # Check if this validator has a file at result level
+                                result_file = result.get("file")
+                                if result_file:
+                                    # Check if this validator's issues match this category
+                                    validator_issues = result.get("issues", [])
+                                    # Try to match by checking if message appears in validator issues
+                                    for v_issue in validator_issues:
+                                        v_msg = v_issue.get("message", "")
+                                        if message[:50] in v_msg or v_msg[:50] in message:
+                                            file_path = result_file
+                                            break
+                                    if file_path:
+                                        break
+
+                    # If still not found, use "unknown"
+                    if not file_path:
+                        logger.warning(
+                            f"Issue {i} missing file_path, category: {category}, "
+                            f"message: {message[:50]}... Using 'unknown' as fallback."
+                        )
+                        file_path = "unknown"
+
+                # Update issue with sanitized file_path
+                issue["file_path"] = file_path
+                sanitized_issues.append(issue)
+
+            # Replace issues with sanitized version
+            data["issues"] = sanitized_issues
+
             return LLMReviewOutput(**data)
         except Exception as e:
             logger.warning(f"Failed to parse LLM response: {e}")
+            # Log the response for debugging (truncated)
+            logger.debug(f"LLM response (first 500 chars): {response[:500]}")
             # Return a safe default
             return LLMReviewOutput(
                 issues=[],
@@ -499,7 +674,9 @@ Respond with JSON:
                 severity = IssueSeverity.WARNING
 
             # Normalize file path to be relative to code_root
-            normalized_path = self._normalize_file_path(issue.file_path)
+            # Safety check: ensure file_path is not None (should be handled by sanitization)
+            file_path = issue.file_path or "unknown"
+            normalized_path = self._normalize_file_path(file_path)
 
             comments.append(ReviewComment(
                 category=category,
@@ -602,7 +779,8 @@ Respond with JSON:
             # Extract string content from response (handles both str and list formats)
             content = response.content
             content = " ".join(str(item) for item in content) if isinstance(content, list) else str(content)
-            llm_output = self._parse_llm_response(content)
+            # Pass validator_results for fallback file_path extraction
+            llm_output = self._parse_llm_response(content, validator_results=validation_results)
         except Exception as e:
             logger.error(f"LLM analysis failed: {e}")
             llm_output = LLMReviewOutput(

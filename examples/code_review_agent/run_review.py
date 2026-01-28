@@ -110,6 +110,7 @@ def run_review_example(
     modules_description_path: Path | None = None,
     external_components_path: Path | None = None,
     use_react: bool = False,
+    quiet: bool = False,
 ):
     """Run the code review example.
 
@@ -141,14 +142,16 @@ def run_review_example(
         print("     GPT_OSS_MODEL_NAME=your-model-name")
         sys.exit(1)
 
-    print("🔑 Environment variables loaded from .env:")
-    print(f"   GPT_OSS_HOST: {api_host or 'not set (will use default)'}")
-    print(f"   GPT_OSS_KEY: {'*' * 8}...{api_key[-4:] if len(api_key) > 4 else '****'}")
-    print(f"   GPT_OSS_MODEL_NAME: {model_name or 'not set (will use default)'}")
+    if not quiet:
+        print("🔑 Environment variables loaded from .env:")
+        print(f"   GPT_OSS_HOST: {api_host or 'not set (will use default)'}")
+        print(f"   GPT_OSS_KEY: {'*' * 8}...{api_key[-4:] if len(api_key) > 4 else '****'}")
+        print(f"   GPT_OSS_MODEL_NAME: {model_name or 'not set (will use default)'}")
 
     # Import the agent (after checking API key to fail fast)
     agent_type = "ReAct" if use_react else "Structured"
-    print(f"🔧 Loading {agent_type} Code Review Agent...")
+    if not quiet:
+        print(f"🔧 Loading {agent_type} Code Review Agent...")
 
     try:
         # Always import both agents (imports are cheap, avoids type checker issues)
@@ -176,22 +179,23 @@ def run_review_example(
         code_root = extract_code(code_zip_path, temp_path)
 
         # Show what we're reviewing
-        print()
-        print("=" * 60)
-        print("CODE REVIEW AGENT EXAMPLE")
-        print("=" * 60)
-        print()
-        print(f"📋 Specification: {spec_path}")
-        print(f"📁 Code directory: {code_root}")
-        print()
+        if not quiet:
+            print()
+            print("=" * 60)
+            print("CODE REVIEW AGENT EXAMPLE")
+            print("=" * 60)
+            print()
+            print(f"📋 Specification: {spec_path}")
+            print(f"📁 Code directory: {code_root}")
+            print()
 
-        # List the Python files
-        python_files = list(code_root.rglob("*.py"))
-        print(f"Found {len(python_files)} Python files:")
-        for pf in python_files:
-            if "__pycache__" not in str(pf):
-                print(f"   - {pf.relative_to(code_root)}")
-        print()
+            # List the Python files
+            python_files = list(code_root.rglob("*.py"))
+            print(f"Found {len(python_files)} Python files:")
+            for pf in python_files:
+                if "__pycache__" not in str(pf):
+                    print(f"   - {pf.relative_to(code_root)}")
+            print()
 
         # Create configuration - will automatically use GPT_OSS_* env vars
         config = ReviewAgentConfig(
@@ -199,11 +203,12 @@ def run_review_example(
             max_iterations=25,  # For ReAct agent (not used by Structured)
         )
 
-        print()
-        print(f"🤖 Using model: {config.llm_model_name}")
-        print(f"🌐 API endpoint: {config.llm_base_url}")
-        print(f"⚡ Agent type: {agent_type} {'(6x faster, better quality)' if not use_react else '(exploratory)'}")
-        print()
+        if not quiet:
+            print()
+            print(f"🤖 Using model: {config.llm_model_name}")
+            print(f"🌐 API endpoint: {config.llm_base_url}")
+            print(f"⚡ Agent type: {agent_type} {'(6x faster, better quality)' if not use_react else '(exploratory)'}")
+            print()
 
         # Create agent - StructuredCodeReviewAgent is the default
         if use_react:
@@ -218,24 +223,29 @@ def run_review_example(
 
         if data_structures_path and data_structures_path.exists():
             data_structures = data_structures_path.read_text(encoding='utf-8')
-            print(f"📖 Using data structures: {data_structures_path}")
+            if not quiet:
+                print(f"📖 Using data structures: {data_structures_path}")
         if coding_guidelines_path and coding_guidelines_path.exists():
             coding_guidelines = coding_guidelines_path.read_text(encoding='utf-8')
-            print(f"📖 Using coding guidelines: {coding_guidelines_path}")
+            if not quiet:
+                print(f"📖 Using coding guidelines: {coding_guidelines_path}")
         if modules_description_path and modules_description_path.exists():
             modules_description = modules_description_path.read_text(encoding='utf-8')
-            print(f"📖 Using modules description: {modules_description_path}")
+            if not quiet:
+                print(f"📖 Using modules description: {modules_description_path}")
 
         external_components = None
         if external_components_path and external_components_path.exists():
             external_components = str(external_components_path)
-            print(f"📦 Using external components: {external_components_path}")
+            if not quiet:
+                print(f"📦 Using external components: {external_components_path}")
 
-        print()
-        print("=" * 60)
-        print("STARTING REVIEW...")
-        print("=" * 60)
-        print()
+        if not quiet:
+            print()
+            print("=" * 60)
+            print("STARTING REVIEW...")
+            print("=" * 60)
+            print()
 
         # Run the review with timing
         start_time = time.time()
@@ -260,43 +270,50 @@ def run_review_example(
             sys.exit(1)
         finally:
             elapsed_time = time.time() - start_time
-            print()
-            print(f"⏱️  Total review time: {elapsed_time:.2f} seconds")
-            print()
+            if not quiet:
+                print()
+                print(f"⏱️  Total review time: {elapsed_time:.2f} seconds")
+                print()
 
         # Print results
-        print()
-        print("=" * 60)
-        print("REVIEW RESULTS")
-        print("=" * 60)
-        print()
+        if not quiet:
+            print()
+            print("=" * 60)
+            print("REVIEW RESULTS")
+            print("=" * 60)
+            print()
 
-        # Print the markdown report
-        report = result.to_markdown()
-        print(report)
+            # Print the markdown report
+            report = result.to_markdown()
+            print(report)
+        else:
+            report = result.to_markdown()
 
         # Save to file if requested
         if output_file:
             output_file.write_text(report)
-            print()
-            print(f"📄 Report saved to: {output_file}")
+            if not quiet:
+                print()
+                print(f"📄 Report saved to: {output_file}")
 
         # Also save JSON
         json_output = output_file.with_suffix(".json") if output_file else None
         if json_output:
             json_output.write_text(result.model_dump_json(indent=2))
-            print(f"📄 JSON saved to: {json_output}")
+            if not quiet:
+                print(f"📄 JSON saved to: {json_output}")
 
-        print()
-        print("=" * 60)
+        if not quiet:
+            print()
+            print("=" * 60)
 
-        # Return exit code based on review result
-        if result.passed:
-            print("✅ Review PASSED")
-            return 0
-        else:
-            print(f"❌ Review FAILED with {result.error_count} errors")
-            return 1
+            # Return exit code based on review result
+            if result.passed:
+                print("✅ Review PASSED")
+            else:
+                print(f"❌ Review FAILED with {result.error_count} errors")
+
+        return 0 if result.passed else 1
 
 
 def main():
@@ -315,13 +332,13 @@ def main():
     parser.add_argument(
         "--spec",
         type=Path,
-        default=PROJECT_ROOT / "test_data" / "module_M4" / "M4.md",
+        default=PROJECT_ROOT / "test_data" / "module_M5" / "M5.md",
         help="Path to specification file (default: test_data/module_M4/M4.md)",
     )
     parser.add_argument(
         "--code",
         type=Path,
-        default=PROJECT_ROOT / "test_data" / "module_M4" / "M4_v1.1_run3_after_tests_after_CR_2",
+        default=PROJECT_ROOT / "test_data" / "module_M5" / "M5_run1_before_CR_1.zip",
         help="Path to generated code (zip file or directory) (default: test_data/module_M4/M4_v1.1_run3_after_tests_after_CR_2)",
     )
     parser.add_argument(
