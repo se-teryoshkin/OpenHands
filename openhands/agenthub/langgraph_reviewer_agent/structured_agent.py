@@ -14,10 +14,10 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
 from openhands.agenthub.langgraph_reviewer_agent.models import (
@@ -83,10 +83,11 @@ class StructuredCodeReviewAgent:
     def llm(self) -> ChatOpenAI:
         """Get the LLM instance."""
         if self._llm is None:
+            api_key = SecretStr(self.config.llm_api_key) if self.config.llm_api_key else None
             self._llm = ChatOpenAI(
                 model=self.config.llm_model_name,
                 temperature=self.config.temperature,
-                api_key=self.config.llm_api_key,
+                api_key=api_key,
                 base_url=self.config.llm_base_url,
             )
         return self._llm
@@ -137,7 +138,7 @@ class StructuredCodeReviewAgent:
             contents[path] = self._read_file(path)
         return contents
 
-    def _run_single_validator(self, name: str, func: callable, args: dict) -> tuple[str, Any]:
+    def _run_single_validator(self, name: str, func: Callable, args: dict) -> tuple[str, Any]:
         """Run a single validator and return (name, result)."""
         try:
             result = func(args)
@@ -479,7 +480,10 @@ Respond with JSON:
 
         try:
             response = self.llm.invoke(prompt)
-            llm_output = self._parse_llm_response(response.content)
+            # Extract string content from response (handles both str and list formats)
+            content = response.content
+            content = " ".join(str(item) for item in content) if isinstance(content, list) else str(content)
+            llm_output = self._parse_llm_response(content)
         except Exception as e:
             logger.error(f"LLM analysis failed: {e}")
             llm_output = LLMReviewOutput(

@@ -138,18 +138,16 @@ def run_review_example(
     print(f"🔧 Loading {agent_type} Code Review Agent...")
 
     try:
-        # Always import StructuredCodeReviewAgent (default)
+        # Always import both agents (imports are cheap, avoids type checker issues)
         from openhands.agenthub.langgraph_reviewer_agent.structured_agent import (
             StructuredCodeReviewAgent,
+        )
+        from openhands.agenthub.langgraph_reviewer_agent.agent import (
+            CodeReviewAgent,
         )
         from openhands.agenthub.langgraph_reviewer_agent import (
             ReviewAgentConfig,
         )
-        # Only import ReAct agent if needed
-        if use_react:
-            from openhands.agenthub.langgraph_reviewer_agent import (
-                CodeReviewAgent,
-            )
     except ImportError as e:
         print(f"❌ Import error: {e}")
         print()

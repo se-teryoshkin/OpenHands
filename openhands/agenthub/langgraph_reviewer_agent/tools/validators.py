@@ -982,13 +982,17 @@ def validate_code_quality_tool(file_path: str) -> str:
             def __init__(self):
                 self.current_function = None
 
-            def visit_FunctionDef(self, node):
+            def visit_FunctionDef(self, node: ast.FunctionDef):
                 old_func = self.current_function
                 self.current_function = node.name
                 self.generic_visit(node)
                 self.current_function = old_func
 
-            visit_AsyncFunctionDef = visit_FunctionDef
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+                old_func = self.current_function
+                self.current_function = node.name
+                self.generic_visit(node)
+                self.current_function = old_func
 
             def visit_Try(self, node):
                 for handler in node.handlers:

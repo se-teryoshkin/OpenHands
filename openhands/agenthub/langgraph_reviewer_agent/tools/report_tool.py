@@ -81,7 +81,7 @@ def create_review_comment_tool(
     }
 
     if line_number is not None:
-        comment["line_number"] = line_number
+        comment["line_number"] = str(line_number)
 
     if suggestion:
         comment["suggestion"] = suggestion
