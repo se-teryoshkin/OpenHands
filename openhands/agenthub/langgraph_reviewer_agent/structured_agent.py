@@ -269,7 +269,6 @@ class StructuredCodeReviewAgent:
         spec_content: str,
         file_contents: dict[str, str],
         validation_results: dict[str, Any],
-        module_name: str,
         coding_guidelines: str = "",
         modules_description: str = "",
     ) -> str:
@@ -301,8 +300,6 @@ class StructuredCodeReviewAgent:
                     validation_summary.append(f"**{name}**: ✓ No issues")
 
         prompt = f"""You are a code review expert. Analyze the following code review results and provide a structured assessment.
-
-## Module: {module_name}
 
 ## Specification
 ```
@@ -389,7 +386,6 @@ Respond with JSON:
     def _convert_to_review_result(
         self,
         llm_output: LLMReviewOutput,
-        module_name: str,
         files_reviewed: list[str],
     ) -> ReviewResult:
         """Convert LLM output to ReviewResult."""
@@ -416,7 +412,6 @@ Respond with JSON:
             ))
 
         return ReviewResult(
-            module_name=module_name,
             passed=llm_output.passed,
             summary=llm_output.summary,
             comments=comments,
@@ -427,7 +422,6 @@ Respond with JSON:
         self,
         spec_path: str,
         code_root: str,
-        module_name: str,
         component_docs: str | None = None,
         data_structures: str | None = None,
         coding_guidelines: str | None = None,
@@ -443,7 +437,7 @@ Respond with JSON:
         """
         self._start_time = datetime.now()
 
-        logger.info(f"Starting structured code review for: {module_name}")
+        logger.info("Starting structured code review")
         logger.info(f"  Spec: {spec_path}")
         logger.info(f"  Code: {code_root}")
 
@@ -479,7 +473,6 @@ Respond with JSON:
             spec_content=spec_content,
             file_contents=file_contents,
             validation_results=validation_results,
-            module_name=module_name,
             coding_guidelines=coding_guidelines or "",
             modules_description=modules_description or "",
         )
@@ -499,7 +492,6 @@ Respond with JSON:
         self._log("Phase 4: Report Generation")
         result = self._convert_to_review_result(
             llm_output=llm_output,
-            module_name=module_name,
             files_reviewed=list(file_contents.keys()),
         )
 

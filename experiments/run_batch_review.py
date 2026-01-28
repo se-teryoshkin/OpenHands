@@ -146,7 +146,6 @@ def run_review(
         result = agent.review(
             spec_path=str(spec_path),
             code_root=str(code_path),
-            module_name=module_name,
             data_structures=data_structures,
             coding_guidelines=coding_guidelines,
             modules_description=modules_description,

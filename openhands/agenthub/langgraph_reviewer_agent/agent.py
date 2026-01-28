@@ -354,7 +354,6 @@ class CodeReviewAgent:
         self,
         spec_path: str,
         code_root: str,
-        module_name: str,
         component_docs: str | None = None,
         data_structures: str | None = None,
         coding_guidelines: str | None = None,
@@ -365,7 +364,6 @@ class CodeReviewAgent:
         Args:
             spec_path: Path to the specification file.
             code_root: Root directory of the generated code.
-            module_name: Name of the module being reviewed.
             component_docs: Optional documentation of external components
                 used in the code (for field validation).
             data_structures: Optional API data structures documentation
@@ -383,13 +381,13 @@ class CodeReviewAgent:
         self._step_count = 0
         self._start_time = datetime.now()
 
-        logger.info(f"Starting code review for module: {module_name}")
+        logger.info("Starting code review")
         logger.info(f"  Spec: {spec_path}")
         logger.info(f"  Code: {code_root}")
 
         # Build the review request message
         request_parts = [
-            f"Please review the generated code for module '{module_name}'.",
+            "Please review the generated code.",
             "",
             f"**Specification file:** {spec_path}",
             f"**Code root directory:** {code_root}",

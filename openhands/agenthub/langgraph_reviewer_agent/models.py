@@ -88,9 +88,6 @@ class ReviewComment(BaseModel):
 class ReviewResult(BaseModel):
     """Complete result of a code review."""
 
-    module_name: str = Field(
-        description="Name of the reviewed module"
-    )
     passed: bool = Field(
         description="Whether the review passed (no errors)"
     )
@@ -127,7 +124,7 @@ class ReviewResult(BaseModel):
         status = "✅ PASSED" if self.passed else "❌ FAILED"
 
         lines = [
-            f"# Code Review: {self.module_name}",
+            f"# Code Review",
             f"**Status:** {status}",
             "",
             f"**Summary:** {self.summary}",
@@ -170,10 +167,10 @@ class ReviewResult(BaseModel):
     def to_cr_feedback(self) -> str:
         """Format as code review feedback for the coding agent."""
         if self.passed:
-            return f"Code review passed for {self.module_name}. {self.summary}"
+            return f"Code review passed. {self.summary}"
 
         lines = [
-            f"Code review feedback for {self.module_name}:",
+            "Code review feedback:",
             "",
             self.summary,
             "",

@@ -2,8 +2,13 @@
 """
 Code Review Agent Example
 
-This example demonstrates how to use the LangGraph-based Code Review Agent
-to review generated code against a specification.
+This example demonstrates how to use the Structured Code Review Agent to review generated code against a specification.
+
+The StructuredCodeReviewAgent uses a deterministic workflow:
+1. Discovery: Read spec and discover all files
+2. Validation: Run all validators in parallel
+3. Analysis: Single LLM call to interpret results
+4. Report: Generate structured output
 
 Uses environment variables from .env file:
     GPT_OSS_HOST - vLLM server URL (e.g., http://localhost:8000/v1)
@@ -11,25 +16,27 @@ Uses environment variables from .env file:
     GPT_OSS_MODEL_NAME - Model name served by vLLM
 
 Usage:
-    # Run the example (loads from .env automatically)
+    # Run with StructuredCodeReviewAgent (default, recommended)
     cd /Users/ngc436/Documents/projects/OpenHands
     poetry run python examples/code_review_agent/run_review.py
 
     # Or with debug logging to see all agent steps
     poetry run python examples/code_review_agent/run_review.py --debug
 
+    # Use ReAct agent instead (slower, more exploratory)
+    poetry run python examples/code_review_agent/run_review.py --react
+
 The example uses:
 - Module specification: test_data/module_M4/M4.md
 - Generated code: test_data/module_M4/M4_v1.1_run3_before_CR_1.zip (extracted)
-
-This code is BEFORE human code review, so the agent should find issues.
+- General info about the whole system modules [OPTIONAL]: test_data/modules_description.md
+- Guidelines (some rules on how to write code) [OPTIONAL]: test_data/guidelines/Agentic Coding Hints React Best Practices.md
+- Data Structures path [OPTIONAL]:
 """
 
 import argparse
-import json
 import logging
 import os
-import shutil
 import sys
 import tempfile
 import zipfile
@@ -86,26 +93,25 @@ def extract_code(zip_path: Path, extract_to: Path) -> Path:
 def run_review_example(
     spec_path: Path,
     code_zip_path: Path,
-    module_name: str,
     debug: bool = False,
     output_file: Path | None = None,
     data_structures_path: Path | None = None,
     coding_guidelines_path: Path | None = None,
     modules_description_path: Path | None = None,
-    use_structured: bool = False,
+    use_react: bool = False,
 ):
     """Run the code review example.
 
     Args:
         spec_path: Path to the specification file.
         code_zip_path: Path to the zip file with generated code.
-        module_name: Name of the module.
         debug: Enable debug logging.
         output_file: Optional path to write the report.
         data_structures_path: Optional path to API data structures file.
         coding_guidelines_path: Optional path to coding guidelines file.
         modules_description_path: Optional path to modules description file.
-        use_structured: If True, use faster StructuredCodeReviewAgent.
+        use_react: If True, use ReAct CodeReviewAgent (slower, more exploratory).
+                  Default is False, using StructuredCodeReviewAgent (faster, better quality).
     """
     # Check for required environment variables
     api_key = os.getenv("GPT_OSS_KEY")
@@ -128,17 +134,21 @@ def run_review_example(
     print(f"   GPT_OSS_MODEL_NAME: {model_name or 'not set (will use default)'}")
 
     # Import the agent (after checking API key to fail fast)
-    agent_type = "Structured" if use_structured else "ReAct"
+    agent_type = "ReAct" if use_react else "Structured"
     print(f"🔧 Loading {agent_type} Code Review Agent...")
 
     try:
+        # Always import StructuredCodeReviewAgent (default)
+        from openhands.agenthub.langgraph_reviewer_agent.structured_agent import (
+            StructuredCodeReviewAgent,
+        )
         from openhands.agenthub.langgraph_reviewer_agent import (
-            CodeReviewAgent,
             ReviewAgentConfig,
         )
-        if use_structured:
-            from openhands.agenthub.langgraph_reviewer_agent.structured_agent import (
-                StructuredCodeReviewAgent,
+        # Only import ReAct agent if needed
+        if use_react:
+            from openhands.agenthub.langgraph_reviewer_agent import (
+                CodeReviewAgent,
             )
     except ImportError as e:
         print(f"❌ Import error: {e}")
@@ -162,7 +172,6 @@ def run_review_example(
         print()
         print(f"📋 Specification: {spec_path}")
         print(f"📁 Code directory: {code_root}")
-        print(f"📦 Module: {module_name}")
         print()
 
         # List the Python files
@@ -176,20 +185,20 @@ def run_review_example(
         # Create configuration - will automatically use GPT_OSS_* env vars
         config = ReviewAgentConfig(
             verbose=debug,
-            max_iterations=25,  # Increased to allow more thorough review
+            max_iterations=25,  # For ReAct agent (not used by Structured)
         )
 
         print()
         print(f"🤖 Using model: {config.llm_model_name}")
         print(f"🌐 API endpoint: {config.llm_base_url}")
-        print(f"⚡ Agent type: {agent_type}")
+        print(f"⚡ Agent type: {agent_type} {'(6x faster, better quality)' if not use_react else '(exploratory)'}")
         print()
 
-        # Create agent
-        if use_structured:
-            agent = StructuredCodeReviewAgent(config, verbose=debug)
-        else:
+        # Create agent - StructuredCodeReviewAgent is the default
+        if use_react:
             agent = CodeReviewAgent(config, debug=debug)
+        else:
+            agent = StructuredCodeReviewAgent(config, verbose=debug)
 
         # Load additional context documents
         data_structures = None
@@ -217,7 +226,6 @@ def run_review_example(
             result = agent.review(
                 spec_path=str(spec_path),
                 code_root=str(code_root),
-                module_name=module_name,
                 data_structures=data_structures,
                 coding_guidelines=coding_guidelines,
                 modules_description=modules_description,
@@ -290,11 +298,6 @@ def main():
         help="Path to generated code zip (default: test_data/module_M4/M4_v1.1_run3_before_CR_1.zip)",
     )
     parser.add_argument(
-        "--module",
-        default="VacancyService",
-        help="Module name (default: VacancyService)",
-    )
-    parser.add_argument(
         "--output", "-o",
         type=Path,
         default=PROJECT_ROOT / "examples" / "code_review_agent" / "review_report.md",
@@ -319,9 +322,9 @@ def main():
         help="Path to modules description file (default: test_data/modules_description.md)",
     )
     parser.add_argument(
-        "--structured", "-s",
+        "--react", "-r",
         action="store_true",
-        help="Use StructuredCodeReviewAgent (6x faster, better F1)",
+        help="Use ReAct CodeReviewAgent instead of StructuredCodeReviewAgent (slower, more exploratory)",
     )
 
     args = parser.parse_args()
@@ -342,13 +345,12 @@ def main():
     exit_code = run_review_example(
         spec_path=args.spec,
         code_zip_path=args.code,
-        module_name=args.module,
         debug=args.debug,
         output_file=args.output,
         data_structures_path=args.data_structures,
         coding_guidelines_path=args.guidelines,
         modules_description_path=args.modules_description,
-        use_structured=args.structured,
+        use_react=args.react,
     )
 
     sys.exit(exit_code)
