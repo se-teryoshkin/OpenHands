@@ -39,6 +39,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -219,7 +220,8 @@ def run_review_example(
         print("=" * 60)
         print()
 
-        # Run the review
+        # Run the review with timing
+        start_time = time.time()
         try:
             result = agent.review(
                 spec_path=str(spec_path),
@@ -234,6 +236,11 @@ def run_review_example(
                 import traceback
                 traceback.print_exc()
             sys.exit(1)
+        finally:
+            elapsed_time = time.time() - start_time
+            print()
+            print(f"⏱️  Total review time: {elapsed_time:.2f} seconds")
+            print()
 
         # Print results
         print()

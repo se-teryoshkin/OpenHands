@@ -236,11 +236,11 @@ def find_code_versions(module_dir: Path) -> list[dict]:
             version_info["stage"] = "before_cr"
             # Extract CR round number
             match = re.search(r'before_cr_(\d+)', name_lower)
-            version_info["cr_round"] = int(match.group(1)) if match else 1
+            version_info["cr_round"] = str(int(match.group(1))) if match else "1"
         elif 'after_cr' in name_lower:
             version_info["stage"] = "after_cr"
             match = re.search(r'after_cr_(\d+)', name_lower)
-            version_info["cr_round"] = int(match.group(1)) if match else 1
+            version_info["cr_round"] = str(int(match.group(1))) if match else "1"
         elif 'after_tests' in name_lower:
             version_info["stage"] = "after_tests"
             # Check if before or after CR
@@ -249,7 +249,7 @@ def find_code_versions(module_dir: Path) -> list[dict]:
             elif 'after_cr' in name_lower:
                 version_info["substage"] = "after_cr"
                 match = re.search(r'after_cr_(\d+)', name_lower)
-                version_info["cr_round"] = int(match.group(1)) if match else 1
+                version_info["cr_round"] = str(int(match.group(1))) if match else "1"
         elif 'final' in name_lower:
             version_info["stage"] = "final"
         else:
@@ -271,11 +271,11 @@ def find_code_versions(module_dir: Path) -> list[dict]:
                 if 'before_cr' in name_lower:
                     version_info["stage"] = "before_cr"
                     match = re.search(r'before_cr_(\d+)', name_lower)
-                    version_info["cr_round"] = int(match.group(1)) if match else 1
+                    version_info["cr_round"] = str(int(match.group(1))) if match else "1"
                 elif 'after_cr' in name_lower:
                     version_info["stage"] = "after_cr"
                     match = re.search(r'after_cr_(\d+)', name_lower)
-                    version_info["cr_round"] = int(match.group(1)) if match else 1
+                    version_info["cr_round"] = str(int(match.group(1))) if match else "1"
                 else:
                     version_info["stage"] = "unknown"
                 versions.append(version_info)

@@ -28,6 +28,7 @@ class IssueCategory(str, Enum):
     GUIDELINE_VIOLATION = "guideline_violation"  # Violates coding guidelines
     SCOPE_VIOLATION = "scope_violation"  # Module implements out-of-scope functionality
     DATA_STRUCTURE_MISMATCH = "data_structure_mismatch"  # Model doesn't match API definition
+    CROSS_FILE_ISSUE = "cross_file_issue"  # Issues spanning multiple files (incorrect class usage, missing imports, etc.)
     GENERAL = "general"
 
 

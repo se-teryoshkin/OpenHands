@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+import jedi
 
 from langchain_core.tools import tool
 
@@ -1549,3 +1550,214 @@ def validate_api_model_compliance_tool(
 
     except Exception as e:
         return json.dumps({"error": f"API model compliance validation failed: {e}"})
+
+def _iter_python_files(code_root: str) -> list[Path]:
+    root = Path(code_root)
+    if not root.exists():
+        return []
+    files: list[Path] = []
+    for p in root.rglob("*.py"):
+        if "__pycache__" in str(p):
+            continue
+        files.append(p)
+    return files
+
+
+@tool
+def validate_cross_file_usage_tool(
+    code_root: str,
+    max_inferences: int = 400,
+    include_tests: bool = False,
+) -> str:
+    """Validate basic cross-file symbol resolution and usage.
+
+    Purpose:
+    - Detect unresolved imports / symbols that look project-local.
+    - Detect obvious attribute/method accesses where Jedi can infer a
+      project-local definition for the base but cannot resolve the member.
+
+    This validator is intentionally conservative (high precision) and caps Jedi
+    inference calls to keep runtime predictable.
+
+    Args:
+        code_root: Root directory of the generated code.
+        max_inferences: Hard cap on Jedi inference calls across the whole repo.
+        include_tests: Whether to also analyze test_*.py files.
+
+    Returns:
+        JSON string with {valid, issues, stats}.
+    """
+    try:
+        root = Path(code_root)
+        if not root.exists():
+            return json.dumps({"error": f"Directory not found: {code_root}"})
+
+        project = jedi.Project(path=str(root), sys_path=[str(root)])
+
+        files = _iter_python_files(code_root)
+        if not include_tests:
+            files = [p for p in files if "test" not in p.name.lower()]
+
+        issues: list[dict[str, Any]] = []
+        infer_calls = 0
+        analyzed_files = 0
+
+        def _add_issue(file_path: str, line: int | None, msg: str, issue_type: str) -> None:
+            issues.append(
+                {
+                    "type": issue_type,
+                    "file": file_path,
+                    "line": line,
+                    "message": msg,
+                    "severity": "warning" if issue_type != "unresolved_import" else "error",
+                }
+            )
+
+        for path in files:
+            try:
+                code = path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+
+            analyzed_files += 1
+
+            try:
+                tree = ast.parse(code)
+            except SyntaxError:
+                continue
+
+            # 1) Unresolved imports (best-effort, avoid 3rd-party noise)
+            for node in ast.walk(tree):
+                if infer_calls >= max_inferences:
+                    break
+
+                if isinstance(node, ast.Import):
+                    line = getattr(node, "lineno", None) or 1
+                    base_col = getattr(node, "col_offset", 0)
+
+                    for alias in node.names:
+                        if infer_calls >= max_inferences:
+                            break
+
+                        src_line = code.splitlines()[line - 1] if 0 < line <= len(code.splitlines()) else ""
+                        idx = src_line.find(alias.name)
+                        if idx < 0:
+                            idx = base_col
+
+                        script = jedi.Script(code, path=str(path), project=project)
+                        infer_calls += 1
+                        inferred = script.infer(line, idx + len(alias.name))
+
+                        if not inferred:
+                            # Conservative: only flag if it smells like project-local (not stdlib)
+                            if "." in alias.name or alias.name in {"src", "app", "module"}:
+                                _add_issue(
+                                    str(path),
+                                    line,
+                                    f"Unresolved import: import {alias.name}",
+                                    "unresolved_import",
+                                )
+
+                elif isinstance(node, ast.ImportFrom):
+                    line = getattr(node, "lineno", None) or 1
+                    base_col = getattr(node, "col_offset", 0)
+
+                    # Resolve module
+                    if node.module and infer_calls < max_inferences:
+                        src_line = code.splitlines()[line - 1] if 0 < line <= len(code.splitlines()) else ""
+                        idx = src_line.find(node.module)
+                        if idx < 0:
+                            idx = base_col
+
+                        script = jedi.Script(code, path=str(path), project=project)
+                        infer_calls += 1
+                        inferred_mod = script.infer(line, idx + len(node.module))
+                        if not inferred_mod and (node.level or 0) == 0:
+                            _add_issue(
+                                str(path),
+                                line,
+                                f"Unresolved import module: from {node.module} import ...",
+                                "unresolved_import",
+                            )
+
+                    # Resolve imported names
+                    for alias in node.names:
+                        if infer_calls >= max_inferences:
+                            break
+                        if alias.name == "*":
+                            continue
+
+                        src_line = code.splitlines()[line - 1] if 0 < line <= len(code.splitlines()) else ""
+                        idx = src_line.find(alias.name)
+                        if idx < 0:
+                            idx = base_col
+
+                        script = jedi.Script(code, path=str(path), project=project)
+                        infer_calls += 1
+                        inferred = script.infer(line, idx + len(alias.name))
+                        if not inferred and (node.level or 0) == 0:
+                            _add_issue(
+                                str(path),
+                                line,
+                                f"Unresolved imported symbol: from {node.module} import {alias.name}",
+                                "unresolved_import",
+                            )
+
+            if infer_calls >= max_inferences:
+                break
+
+            # 2) Obvious attribute access failures where base is project-local
+            for node in ast.walk(tree):
+                if infer_calls >= max_inferences:
+                    break
+                if not isinstance(node, ast.Attribute):
+                    continue
+                if not hasattr(node, "lineno") or not hasattr(node, "col_offset"):
+                    continue
+
+                line = node.lineno
+                src_line = code.splitlines()[line - 1] if 0 < line <= len(code.splitlines()) else ""
+                attr = node.attr
+                idx = src_line.find(attr, node.col_offset)
+                if idx < 0:
+                    continue
+
+                script = jedi.Script(code, path=str(path), project=project)
+                infer_calls += 1
+                inferred_attr = script.infer(line, idx + len(attr))
+                if inferred_attr:
+                    continue
+
+                # Infer base only if simple name; keep precision high
+                if isinstance(node.value, ast.Name) and infer_calls < max_inferences:
+                    base_name = node.value.id
+                    base_idx = src_line.find(base_name)
+                    if base_idx >= 0:
+                        infer_calls += 1
+                        base_defs = script.infer(line, base_idx + len(base_name))
+                        base_is_project = any(
+                            d.module_path and str(root) in str(d.module_path) for d in base_defs
+                        )
+                        if base_is_project:
+                            _add_issue(
+                                str(path),
+                                line,
+                                f"Possibly invalid member access '{base_name}.{attr}' "
+                                f"(could not resolve '{attr}' on inferred project symbol)",
+                                "unresolved_member",
+                            )
+
+        errors = [i for i in issues if i.get("severity") == "error"]
+        results = {
+            "valid": len(errors) == 0,
+            "issues": issues,
+            "stats": {
+                "analyzed_files": analyzed_files,
+                "infer_calls": infer_calls,
+                "infer_cap": max_inferences,
+            },
+        }
+        return json.dumps(results, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"Cross-file usage validation failed: {e}"})
+

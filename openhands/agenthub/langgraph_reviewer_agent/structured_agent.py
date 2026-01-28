@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -32,6 +33,7 @@ from openhands.agenthub.langgraph_reviewer_agent.tools.validators import (
     validate_code_quality_tool,
     validate_pydantic_usage_tool,
     validate_project_structure_tool,
+    validate_cross_file_usage_tool,
 )
 
 logger = logging.getLogger("code_review_agent")
@@ -39,7 +41,7 @@ logger = logging.getLogger("code_review_agent")
 
 class ReviewIssue(BaseModel):
     """Single issue found during review."""
-    category: str = Field(description="Issue category: signature_mismatch, test_quality, code_quality_issue, pydantic_issue, structure_issue, missing_implementation, field_mapping_error, general")
+    category: str = Field(description="Issue category: signature_mismatch, test_quality, code_quality_issue, pydantic_issue, structure_issue, missing_implementation, field_mapping_error, cross_file_issue, general")
     severity: str = Field(description="Severity: error, warning, info")
     file_path: str = Field(description="Path to the file with the issue")
     line_number: int | None = Field(default=None, description="Line number if applicable")
@@ -58,8 +60,9 @@ class StructuredCodeReviewAgent:
     """Structured Workflow Code Review Agent.
 
     Executes a deterministic workflow:
-    1. Discovery: Read spec and find all files (parallel)
-    2. Validation: Run all validators (parallel)
+    1. Discovery: Read spec and find all files
+    2. Validation: Run all validators in parallel (signatures, code quality,
+       test quality, Pydantic usage, project structure)
     3. Analysis: Single LLM call to interpret results
     4. Report: Generate structured output
     """
@@ -146,6 +149,7 @@ class StructuredCodeReviewAgent:
                 return (name, json.loads(result))
             return (name, result)
         except Exception as e:
+            logger.debug(f"Validator {name} failed: {e}")
             return (name, {"error": str(e)})
 
     def _extract_interface_from_spec(self, spec_content: str) -> str:
@@ -172,66 +176,15 @@ class StructuredCodeReviewAgent:
         file_contents: dict[str, str],
         api_data_structures: str = "",
     ) -> dict[str, Any]:
-        """Run all validators and collect results."""
+        """Run all validators in parallel and collect results."""
         results = {}
 
-        self._log("Running all validators...")
+        self._log("Running all validators in parallel...")
 
         # Extract interface from spec for signature validation
         spec_interface = self._extract_interface_from_spec(spec_content)
 
-        # 1. Signature validation (for service files)
-        for file_info in files.get("source_files", []):
-            if "service" in file_info["name"].lower():
-                try:
-                    # Find class name from file
-                    content = file_contents.get(file_info["path"], "")
-                    class_match = re.search(r'class\s+(\w+)', content)
-                    class_name = class_match.group(1) if class_match else "Service"
-
-                    result = validate_signatures_tool.invoke({
-                        "spec_interface": spec_interface,
-                        "impl_file": file_info["path"],
-                        "impl_class": class_name,
-                    })
-                    results[f"signatures_{file_info['name']}"] = json.loads(result)
-                except Exception as e:
-                    results[f"signatures_{file_info['name']}"] = {"error": str(e)}
-
-        # 2. Code quality validation (for each source file)
-        for file_info in files.get("source_files", []):
-            try:
-                result = validate_code_quality_tool.invoke({
-                    "file_path": file_info["path"],
-                })
-                results[f"code_quality_{file_info['name']}"] = json.loads(result)
-            except Exception as e:
-                results[f"code_quality_{file_info['name']}"] = {"error": str(e)}
-
-        # 3. Test quality validation (for each test file)
-        for file_info in files.get("test_files", []):
-            try:
-                result = validate_test_quality_tool.invoke({
-                    "test_file": file_info["path"],
-                    "interface_methods": [],
-                    "allow_mocking": False,
-                })
-                results[f"test_quality_{file_info['name']}"] = json.loads(result)
-            except Exception as e:
-                results[f"test_quality_{file_info['name']}"] = {"error": str(e)}
-
-        # 3. Pydantic usage validation (once for whole codebase)
-        try:
-            result = validate_pydantic_usage_tool.invoke({
-                "code_root": code_root,
-                "api_data_structures": api_data_structures,
-            })
-            results["pydantic_usage"] = json.loads(result)
-        except Exception as e:
-            results["pydantic_usage"] = {"error": str(e)}
-
-        # 4. Project structure validation
-        # Try to find the actual project root (parent of src/ or module directories)
+        # Prepare project root for structure validation
         code_path = Path(code_root)
         project_root = code_root
         if code_path.name.endswith("_module") or code_path.name in ("src", "lib"):
@@ -239,14 +192,96 @@ class StructuredCodeReviewAgent:
         elif code_path.parent.name.endswith("_module"):
             project_root = str(code_path.parent.parent)
 
-        try:
-            result = validate_project_structure_tool.invoke({
+        # Collect all validation tasks
+        tasks = []
+
+        # 1. Signature validation tasks (for service files)
+        for file_info in files.get("source_files", []):
+            if "service" in file_info["name"].lower():
+                content = file_contents.get(file_info["path"], "")
+                class_match = re.search(r'class\s+(\w+)', content)
+                class_name = class_match.group(1) if class_match else "Service"
+
+                tasks.append((
+                    f"signatures_{file_info['name']}",
+                    validate_signatures_tool.invoke,
+                    {
+                        "spec_interface": spec_interface,
+                        "impl_file": file_info["path"],
+                        "impl_class": class_name,
+                    }
+                ))
+
+        # 2. Code quality validation tasks (for each source file)
+        for file_info in files.get("source_files", []):
+            tasks.append((
+                f"code_quality_{file_info['name']}",
+                validate_code_quality_tool.invoke,
+                {"file_path": file_info["path"]}
+            ))
+
+        # 3. Test quality validation tasks (for each test file)
+        for file_info in files.get("test_files", []):
+            tasks.append((
+                f"test_quality_{file_info['name']}",
+                validate_test_quality_tool.invoke,
+                {
+                    "test_file": file_info["path"],
+                    "interface_methods": [],
+                    "allow_mocking": False,
+                }
+            ))
+
+        # 4. Pydantic usage validation (once for whole codebase)
+        tasks.append((
+            "pydantic_usage",
+            validate_pydantic_usage_tool.invoke,
+            {
+                "code_root": code_root,
+                "api_data_structures": api_data_structures,
+            }
+        ))
+
+        # 5. Cross-file usage validation
+        tasks.append((
+            "cross_file_usage",
+            validate_cross_file_usage_tool.invoke,
+            {
+                "code_root": code_root,
+                "max_inferences": 400,
+                "include_tests": False,
+            }
+        ))
+
+        # 6. Project structure validation
+        tasks.append((
+            "project_structure",
+            validate_project_structure_tool.invoke,
+            {
                 "code_root": project_root,
                 "module_name": "module",
-            })
-            struct_result = json.loads(result)
-            # Filter to only keep significant structure issues
-            # Humans typically care about: misplaced doc files, not about src/ directory organization
+            }
+        ))
+
+        # Execute all tasks in parallel
+        with ThreadPoolExecutor(max_workers=min(len(tasks), 20)) as executor:
+            future_to_key = {}
+            for key, func, args in tasks:
+                future = executor.submit(self._run_single_validator, key, func, args)
+                future_to_key[future] = key
+
+            # Collect results as they complete
+            for future in as_completed(future_to_key):
+                key = future_to_key[future]
+                try:
+                    _, result = future.result()
+                    results[key] = result
+                except Exception as e:
+                    results[key] = {"error": str(e)}
+
+        # Post-process project structure results to filter issues
+        if "project_structure" in results and isinstance(results["project_structure"], dict):
+            struct_result = results["project_structure"]
             if "issues" in struct_result:
                 filtered_issues = []
                 for issue in struct_result["issues"]:
@@ -259,9 +294,6 @@ class StructuredCodeReviewAgent:
                     ):
                         filtered_issues.append(issue)
                 struct_result["issues"] = filtered_issues
-            results["project_structure"] = struct_result
-        except Exception as e:
-            results["project_structure"] = {"error": str(e)}
 
         return results
 
@@ -333,12 +365,21 @@ class StructuredCodeReviewAgent:
 **STRICTLY analyze only the validation results above.** Do NOT invent new issues.
 
 For each issue ALREADY found by validators, convert it to this format:
-1. **category**: One of: signature_mismatch, test_quality, code_quality_issue, pydantic_issue, structure_issue, general
+1. **category**: One of: signature_mismatch, test_quality, code_quality_issue, pydantic_issue, structure_issue, cross_file_issue, general
 2. **severity**: error (must fix), warning (should fix), info (suggestion)
 3. **file_path**: The file where the issue is located (from validator output)
 4. **line_number**: Line number if reported by validator (null if not)
 5. **message**: The issue message from the validator
 6. **suggestion**: How to fix it
+
+**CATEGORY MAPPING RULES:**
+- Issues from `cross_file_usage` validator → use category `cross_file_issue`
+- Issues from `validate_signatures_tool` → use category `signature_mismatch`
+- Issues from `validate_test_quality_tool` → use category `test_quality`
+- Issues from `validate_code_quality_tool` → use category `code_quality_issue`
+- Issues from `validate_pydantic_usage_tool` → use category `pydantic_issue`
+- Issues from `validate_project_structure_tool` → use category `structure_issue`
+- All other validator issues → use category `general`
 
 **CRITICAL RULES:**
 - ONLY report issues that were found by the validators above
@@ -432,26 +473,30 @@ Respond with JSON:
 
         Workflow:
         1. Discovery: Read spec and discover files
-        2. Validation: Run all validators
+        2. Validation: Run all validators in parallel (signatures, code quality,
+           test quality, Pydantic usage, project structure)
         3. Analysis: Single LLM call to interpret results
         4. Report: Generate structured output
         """
         self._start_time = datetime.now()
-
         logger.info("Starting structured code review")
         logger.info(f"  Spec: {spec_path}")
         logger.info(f"  Code: {code_root}")
 
         # Phase 1: Discovery
+        phase_start = datetime.now()
         self._log("Phase 1: Discovery")
         spec_content = self._read_file(spec_path)
         files = self._discover_files(code_root)
         file_contents = self._read_all_files(files)
+        discovery_time = (datetime.now() - phase_start).total_seconds()
 
         self._log(f"  Found {len(files.get('source_files', []))} source files, "
                   f"{len(files.get('test_files', []))} test files")
+        self._log(f"  Discovery completed in {discovery_time:.2f}s")
 
         # Phase 2: Validation
+        phase_start = datetime.now()
         self._log("Phase 2: Validation")
         validation_results = self._run_validators(
             spec_content=spec_content,
@@ -460,6 +505,7 @@ Respond with JSON:
             file_contents=file_contents,
             api_data_structures=data_structures or "",
         )
+        validation_time = (datetime.now() - phase_start).total_seconds()
 
         # Count issues from validators
         total_validator_issues = 0
