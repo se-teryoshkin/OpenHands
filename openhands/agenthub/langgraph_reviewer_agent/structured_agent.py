@@ -553,10 +553,11 @@ For EACH issue listed above, you need to:
 - **error**: Critical issues that must be fixed
   - Missing required methods (signature_mismatch)
   - Code that will cause runtime failures
+  - Mocks instead of working code
   - Sections with incorrect except ... Exception and large blocks of code under try ... except
   - Critical security or correctness issues
 - **warning**: Issues that should be addressed
-  - Code quality issues (broad exception handling)
+  - Code quality issues
   - Test quality issues (superficial tests)
   - Potential bugs or suboptimal patterns
 - **info**: Suggestions for improvement
@@ -579,7 +580,7 @@ For each issue, output:
   "line_number": <same as input or null>,
   "message": "<same as input>",
   "severity": "error|warning|info",
-  "suggestion": "<your suggestion for how to fix it>"
+  "suggestion": "<your suggestion for how to fix it, use best code practices>"
 }
 
 Respond with JSON:
