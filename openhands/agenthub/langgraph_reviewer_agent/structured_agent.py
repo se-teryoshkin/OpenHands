@@ -57,12 +57,27 @@ class LLMReviewOutput(BaseModel):
 
 class ExtractedIssue(BaseModel):
     """Issue extracted deterministically from validator output."""
+    issue_id: int  # Unique ID for matching with LLM output
     category: str
     file_path: str
     line_number: int | None
     message: str
     validator_name: str
     validator_issue: dict[str, Any]  # Original validator issue for context
+
+
+class LLMIssueSeverity(BaseModel):
+    """LLM output for a single issue - only severity and suggestion."""
+    issue_id: int = Field(description="Issue ID to match with extracted issue")
+    severity: str = Field(description="Severity: error, warning, info")
+    suggestion: str | None = Field(default=None, description="How to fix the issue")
+
+
+class LLMSeverityOutput(BaseModel):
+    """Structured output from LLM - only severity and suggestions for issues."""
+    issues: list[LLMIssueSeverity] = Field(description="List of severity assignments for issues")
+    summary: str = Field(description="Brief summary of the review findings")
+    passed: bool = Field(description="Whether the code passes review (no errors)")
 
 
 class ModuleNames(BaseModel):
@@ -397,8 +412,14 @@ If a spec module name clearly matches a directory (even with variations), includ
                     }
                 ))
 
-        # 2. Code quality validation tasks (for each source file)
+        # 2. Code quality validation tasks (for each source file and each test file)
         for file_info in files.get("source_files", []):
+            tasks.append((
+                f"code_quality_{file_info['name']}",
+                validate_code_quality_tool.invoke,
+                {"file_path": file_info["path"]}
+            ))
+        for file_info in files.get("test_files", []):
             tasks.append((
                 f"code_quality_{file_info['name']}",
                 validate_code_quality_tool.invoke,
@@ -492,21 +513,12 @@ If a spec module name clearly matches a directory (even with variations), includ
         modules_description: str = "",
     ) -> str:
         """Build the prompt for LLM analysis."""
-        # Prepare file contents summary
-        files_summary = []
-        for path, content in file_contents.items():
-            # Truncate long files
-            if len(content) > 3000:
-                content = content[:3000] + "\n... (truncated)"
-            files_summary.append(f"### {Path(path).name}\n```python\n{content}\n```")
-
-        # Prepare extracted issues list for LLM
+        # Prepare extracted issues list for LLM (minimal - only ID, category, file, and message)
         issues_list = []
-        for i, issue in enumerate(extracted_issues, 1):
-            line_str = f", Line: {issue.line_number}" if issue.line_number else ""
+        for issue in extracted_issues:
+            line_str = f" (line {issue.line_number})" if issue.line_number else ""
             issues_list.append(
-                f"{i}. Category: {issue.category}, File: {issue.file_path}{line_str}, "
-                f"Message: {issue.message[:150]}"
+                f"ID {issue.issue_id}: [{issue.category}] {issue.file_path}{line_str} - {issue.message[:200]}"
             )
 
         prompt = f"""You are a code review expert. Your task is to assign severity levels and generate suggestions for the issues found by validators.
@@ -516,12 +528,9 @@ If a spec module name clearly matches a directory (even with variations), includ
 {spec_content[:4000]}
 ```
 
-## Source Files
-{chr(10).join(files_summary[:5])}
+## Issues Found by Validators
 
-## Issues Found by Validators (ALREADY EXTRACTED)
-
-The following issues were found deterministically by validators. You MUST process ALL of them:
+The following issues were found deterministically. You MUST process ALL of them by their ID:
 
 {chr(10).join(issues_list)}
 
@@ -530,7 +539,7 @@ The following issues were found deterministically by validators. You MUST proces
         if coding_guidelines:
             prompt += f"""
 ## Coding Guidelines
-{coding_guidelines[:2000]}
+{coding_guidelines}
 """
 
         if modules_description:
@@ -542,12 +551,11 @@ The following issues were found deterministically by validators. You MUST proces
         prompt += """
 ## Your Task
 
-**IMPORTANT: The issues above are ALREADY EXTRACTED. You MUST process ALL of them.**
+**IMPORTANT: Process ALL issues listed above by their ID.**
 
-For EACH issue listed above, you need to:
-1. **Keep the same category, file_path, line_number, and message** (already provided)
-2. **Assign severity**: error (must fix), warning (should fix), info (suggestion)
-3. **Generate suggestion**: How to fix the issue
+For EACH issue ID, you need to:
+1. **Assign severity**: error (must fix), warning (should fix), info (suggestion)
+2. **Generate suggestion**: How to fix the issue
 
 **Severity Assignment Rules:**
 - **error**: Critical issues that must be fixed
@@ -567,33 +575,19 @@ For EACH issue listed above, you need to:
   - Minor optimizations
 
 **CRITICAL RULES:**
-- Process ALL issues listed above (same number of issues in output as input)
-- Keep category, file_path, line_number, and message EXACTLY as provided
-- Only assign severity and generate suggestion
-- Do NOT skip, merge, or filter issues
-- Do NOT add new issues not in the list above
+- Process ALL issue IDs listed above (same number of issues in output as input)
+- Use the exact issue_id to match your response
+- Only provide severity and suggestion
+- Do NOT skip any issue IDs
 
 **Output Format:**
-For each issue, output:
-{
-  "category": "<same as input>",
-  "file_path": "<same as input>",
-  "line_number": <same as input or null>,
-  "message": "<same as input>",
-  "severity": "error|warning|info",
-  "suggestion": "<your suggestion for how to fix it, use best code practices>"
-}
-
 Respond with JSON:
 {
   "issues": [
     {
-      "category": "...",
-      "file_path": "...",
-      "line_number": ...,
-      "message": "...",
+      "issue_id": <integer ID from input>,
       "severity": "error|warning|info",
-      "suggestion": "..."
+      "suggestion": "<your suggestion for how to fix it>"
     },
     ...
   ],
@@ -683,8 +677,10 @@ Respond with JSON:
                 # Extract message
                 message = issue.get("message", str(issue))
 
-                # Create extracted issue
+                # Create extracted issue with ID
+                issue_id = len(extracted_issues) + 1
                 extracted_issues.append(ExtractedIssue(
+                    issue_id=issue_id,
                     category=category,
                     file_path=file_path,
                     line_number=line_number,
@@ -742,28 +738,23 @@ Respond with JSON:
 
     def _merge_llm_output_with_extracted_issues(
         self,
-        llm_output: LLMReviewOutput,
+        llm_output: LLMSeverityOutput,
         extracted_issues: list[ExtractedIssue],
     ) -> LLMReviewOutput:
         """Merge LLM output with deterministically extracted issues.
 
-        The LLM only provides severity and suggestions. We merge these with
+        The LLM only provides severity and suggestions by issue_id. We merge these with
         the pre-extracted issues to ensure all issues are included.
         """
-        # Create a mapping from extracted issues to LLM issues
-        # Match by message (first 50 chars) and file_path
-        issue_map: dict[tuple[str, str], ReviewIssue] = {}
+        # Create a mapping from issue_id to LLM output
+        issue_map: dict[int, LLMIssueSeverity] = {}
         for llm_issue in llm_output.issues:
-            msg_key = llm_issue.message[:50]
-            file_key = llm_issue.file_path
-            issue_map[(msg_key, file_key)] = llm_issue
+            issue_map[llm_issue.issue_id] = llm_issue
 
-        # Merge extracted issues with LLM output
+        # Merge extracted issues with LLM output by ID
         merged_issues: list[ReviewIssue] = []
         for extracted in extracted_issues:
-            msg_key = extracted.message[:50]
-            file_key = extracted.file_path
-            llm_issue = issue_map.get((msg_key, file_key))
+            llm_issue = issue_map.get(extracted.issue_id)
 
             if llm_issue:
                 # Use LLM's severity and suggestion
@@ -778,7 +769,7 @@ Respond with JSON:
             else:
                 # LLM didn't provide output for this issue, use defaults
                 logger.warning(
-                    f"LLM didn't provide severity/suggestion for issue: "
+                    f"LLM didn't provide severity/suggestion for issue ID {extracted.issue_id}: "
                     f"{extracted.category} in {extracted.file_path}"
                 )
                 merged_issues.append(ReviewIssue(
@@ -1031,6 +1022,7 @@ Respond with JSON:
             file_name = file_info["name"]
             file_path = file_info["path"]
             self._file_path_mapping[f"test_quality_{file_name}"] = file_path
+            self._file_path_mapping[f"code_quality_{file_name}"] = file_path
 
         # Count issues from validators
         total_validator_issues = 0
@@ -1060,8 +1052,8 @@ Respond with JSON:
         )
 
         try:
-            llm_structured = self._invoke_structured_output(LLMReviewOutput, prompt)
-            assert isinstance(llm_structured, LLMReviewOutput)
+            llm_structured = self._invoke_structured_output(LLMSeverityOutput, prompt)
+            assert isinstance(llm_structured, LLMSeverityOutput)
             llm_output = self._merge_llm_output_with_extracted_issues(
                 llm_structured,
                 extracted_issues,

@@ -335,14 +335,14 @@ def main():
     parser.add_argument(
         "--spec",
         type=Path,
-        default=PROJECT_ROOT / "test_data" / "module_M5" / "M5.md",
+        default=PROJECT_ROOT / "test_data" / "module_M4" / "M4.md",
         help="Path to specification file (default: test_data/module_M4/M4.md)",
     )
     parser.add_argument(
         "--code",
         type=Path,
-        default=PROJECT_ROOT / "test_data" / "module_M5" / "M5_run1_before_CR_1.zip",
-        help="Path to generated code (zip file or directory) (default: test_data/module_M4/M4_v1.1_run3_after_tests_after_CR_2)",
+        default=PROJECT_ROOT / "test_data" / "module_M4" / "M4_lvm_run",
+        help="Path to generated code (zip file or directory) (default: test_data/module_M4/M4_lvm_run)",
     )
     parser.add_argument(
         "--output", "-o",
