@@ -553,6 +553,7 @@ For EACH issue listed above, you need to:
 - **error**: Critical issues that must be fixed
   - Missing required methods (signature_mismatch)
   - Code that will cause runtime failures
+  - Sections with incorrect except ... Exception and large blocks of code under try ... except
   - Critical security or correctness issues
 - **warning**: Issues that should be addressed
   - Code quality issues (broad exception handling)
