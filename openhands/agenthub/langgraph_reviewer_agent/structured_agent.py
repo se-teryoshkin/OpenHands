@@ -116,6 +116,7 @@ class StructuredCodeReviewAgent:
             self._llm = ChatOpenAI(
                 model=self.config.llm_model_name,
                 temperature=self.config.temperature,
+                top_p=self.config.top_p,
                 api_key=api_key,
                 base_url=self.config.llm_base_url,
             )
@@ -187,18 +188,18 @@ If no modules are clearly identified, return an empty list with "low" confidence
         root = Path(code_root)
         available_modules = set()
 
-        # Look for src/*_module/ directories
+        # Look for src/ directories
         src_dir = root / "src"
         if src_dir.exists():
             for item in src_dir.iterdir():
-                if item.is_dir() and item.name.endswith("_module"):
+                if item.is_dir():  # and item.name.endswith("_module"):
                     available_modules.add(item.name)
 
-        # Look for tests/*_module/ directories
+        # Look for tests/ directories
         tests_dir = root / "tests"
         if tests_dir.exists():
             for item in tests_dir.iterdir():
-                if item.is_dir() and item.name.endswith("_module"):
+                if item.is_dir(): # and item.name.endswith("_module"):
                     available_modules.add(item.name)
 
         # self._log(f"Available modules found: {available_modules}")
@@ -230,12 +231,10 @@ If a spec module name clearly matches a directory (even with variations), includ
             logger.warning(f"Failed to match modules with code structure: {e}")
             matched_data = None
 
-        logger.info("LLM answer on matched modules: ", matched_data)
+        assert isinstance(matched_data, MatchedModules)
 
-        if isinstance(matched_data, MatchedModules):
-            matched_modules = matched_data.matched_modules
-        else:
-            matched_modules = []
+        matched_modules = matched_data.matched_modules
+        logger.info(f"Matched modules: {matched_data.matched_modules} with reasoning: {matched_data.reasoning}")
 
         if not matched_modules:
             for spec_name in spec_module_names:
@@ -605,11 +604,16 @@ Respond with JSON:
     def _extract_issues_deterministically(
         self,
         validation_results: dict[str, Any],
+        module_names: list[str] | None = None,
     ) -> list[ExtractedIssue]:
         """Extract all issues from validators deterministically.
 
         This phase extracts issues without LLM involvement, ensuring 100% consistency.
         Returns list of ExtractedIssue objects with category, file_path, line_number, message.
+
+        Args:
+            validation_results: Results from all validators
+            module_names: Optional list of module names to filter issues by
         """
         extracted_issues = []
 
@@ -656,6 +660,19 @@ Respond with JSON:
                             file_path = "unknown"
                     else:
                         file_path = "unknown"
+
+                # Filter by module names if provided
+                if module_names and file_path != "unknown":
+                    # Check if file belongs to any of the specified modules
+                    belongs_to_module = False
+                    for module_name in module_names:
+                        if f"src/{module_name}/" in file_path or f"tests/{module_name}/" in file_path:
+                            belongs_to_module = True
+                            break
+
+                    if not belongs_to_module:
+                        # Skip this issue - it's from a different module
+                        continue
 
                 # Extract line number
                 line_number = issue.get("line")
@@ -1022,7 +1039,10 @@ Respond with JSON:
         # Phase 2.5: Deterministic Issue Extraction
         phase_start = datetime.now()
         self._log("Phase 2.5: Deterministic Issue Extraction")
-        extracted_issues = self._extract_issues_deterministically(validation_results)
+        extracted_issues = self._extract_issues_deterministically(
+            validation_results,
+            module_names=module_names
+        )
         extraction_time = (datetime.now() - phase_start).total_seconds()
         self._log(f"  Extracted {len(extracted_issues)} issues deterministically in {extraction_time:.2f}s")
 

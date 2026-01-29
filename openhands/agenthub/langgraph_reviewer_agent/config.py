@@ -27,7 +27,8 @@ class ReviewAgentConfig:
     )
 
     # Agent behavior
-    temperature: float = 0.0
+    temperature: float = 1.0
+    top_p = 1
     max_iterations: int = 25  # Each iteration = ~3 LangGraph steps
     verbose: bool = True
 
