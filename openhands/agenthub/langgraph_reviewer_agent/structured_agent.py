@@ -554,7 +554,8 @@ For EACH issue listed above, you need to:
   - Missing required methods (signature_mismatch)
   - Code that will cause runtime failures
   - Mocks instead of working code
-  - Sections with incorrect except ... Exception and large blocks of code under try ... except
+  - Code with try ... except Exception
+  - Large blocks of code under try ... except
   - Critical security or correctness issues
 - **warning**: Issues that should be addressed
   - Code quality issues
