@@ -18,6 +18,14 @@ def get_conversation_event_filename(
     return f'{get_conversation_events_dir(sid, user_id)}{id}.json'
 
 
+def get_tasks_folder(sid: str, user_id: str | None):
+    return f'{get_conversation_dir(sid, user_id)}tasks'
+
+
+def get_task_filename(sid: str, user_id: str | None, task_id: str):
+    return f'{get_tasks_folder(sid, user_id)}/{task_id}.json'
+
+
 def get_conversation_metadata_filename(sid: str, user_id: str | None = None) -> str:
     return f'{get_conversation_dir(sid, user_id)}metadata.json'
 
