@@ -8,7 +8,6 @@ and a single LLM call for analysis, providing:
 - Predictable results
 """
 
-import asyncio
 import json
 import logging
 import re
@@ -68,12 +67,14 @@ class ExtractedIssue(BaseModel):
 
 class ModuleNames(BaseModel):
     """Module names extracted from specification."""
-    module_names: list[str] = Field(description="List of module names mentioned in the specification (e.g., ['screening_module', 'storage_module'])")
+    reasoning: str = Field(description="Reason for module name selection with direct quote from specification")
+    module_names: list[str] = Field(description="List of module names from code mentioned in the specification")
     confidence: str = Field(description="Confidence level: 'high', 'medium', or 'low'")
 
 
 class MatchedModules(BaseModel):
     """Module directories matched with code structure."""
+    reasoning: str = Field(description="Reasoning behind the match between module name in the specification with direct quote(s) and module names from code")
     matched_modules: list[str] = Field(description="List of module directory names that match the spec (e.g., ['screening_module', 'storage_module'])")
     unmatched_spec_modules: list[str] = Field(default_factory=list, description="Module names from spec that couldn't be matched")
 
@@ -137,18 +138,17 @@ class StructuredCodeReviewAgent:
 
     def _extract_module_names_from_spec(self, spec_content: str) -> list[str]:
         """Extract module names from specification using LLM structured output."""
-        prompt = f"""Analyze the following specification and extract the names of modules that this specification defines or references.
+        prompt = f"""Analyze the following specification and extract the names of modules that this specification is directed towards to.
 
 Look for:
-- Module names mentioned in headers (e.g., "Модуль скрининга" → "screening_module")
-- Service/class names that indicate modules (e.g., "ScreeningService" → "screening_module")
-- Directory references or module paths
-- Any explicit module mentions
+- Module names mentioned in headers that are defined to be implemented by this specification
 
-Return ONLY the module directory names (e.g., "screening_module", "vacancy_module", "storage_module"), not the full descriptions.
+Pay attention that there can be also some mentions of existing modules that we are not interested in
+
+Return ONLY the module names (e.g., "модуль хранения", "storage module"), not the full descriptions.
 
 Specification:
-{spec_content[:4000]}  # Truncate if too long
+{spec_content[:4000]}  # Truncate as for now we suppose that module name is somewhere in the beginning
 
 If no modules are clearly identified, return an empty list with "low" confidence."""
         try:
@@ -158,6 +158,8 @@ If no modules are clearly identified, return an empty list with "low" confidence
             return []
 
         assert isinstance(module_data, ModuleNames)
+        logger.info(f"Extracted modules from specification {module_data.module_names} with reasoning: {module_data.reasoning}")
+
         self._log(
             f"Extracted module names from spec: {module_data.module_names} "
             f"(confidence: {module_data.confidence})"
@@ -199,6 +201,9 @@ If no modules are clearly identified, return an empty list with "low" confidence
                 if item.is_dir() and item.name.endswith("_module"):
                     available_modules.add(item.name)
 
+        # self._log(f"Available modules found: {available_modules}")
+        logger.info(f"Available modules found: {available_modules}")
+
         if not available_modules:
             self._log("No module directories found in code structure")
             return []
@@ -215,7 +220,7 @@ Available module directories in code:
 Your task:
 1. Match each specification module name to the corresponding directory name
 2. Consider variations (e.g., "screening" → "screening_module", "Модуль скрининга" → "screening_module")
-3. Consider partial matches (e.g., "storage" → "storage_module")
+3. Consider partial matches (e.g., "screening" → "screening_module")
 4. Return ONLY the matched directory names that exist in the code
 
 If a spec module name clearly matches a directory (even with variations), include it in matched_modules."""
@@ -224,6 +229,8 @@ If a spec module name clearly matches a directory (even with variations), includ
         except Exception as e:
             logger.warning(f"Failed to match modules with code structure: {e}")
             matched_data = None
+
+        logger.info("LLM answer on matched modules: ", matched_data)
 
         if isinstance(matched_data, MatchedModules):
             matched_modules = matched_data.matched_modules
