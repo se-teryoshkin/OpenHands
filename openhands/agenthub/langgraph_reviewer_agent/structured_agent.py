@@ -8,7 +8,6 @@ and a single LLM call for analysis, providing:
 - Predictable results
 """
 
-import asyncio
 import json
 import logging
 import re
@@ -68,12 +67,14 @@ class ExtractedIssue(BaseModel):
 
 class ModuleNames(BaseModel):
     """Module names extracted from specification."""
-    module_names: list[str] = Field(description="List of module names mentioned in the specification (e.g., ['screening_module', 'storage_module'])")
+    reasoning: str = Field(description="Reason for module name selection with direct quote from specification")
+    module_names: list[str] = Field(description="List of module names from code mentioned in the specification")
     confidence: str = Field(description="Confidence level: 'high', 'medium', or 'low'")
 
 
 class MatchedModules(BaseModel):
     """Module directories matched with code structure."""
+    reasoning: str = Field(description="Reasoning behind the match between module name in the specification with direct quote(s) and module names from code")
     matched_modules: list[str] = Field(description="List of module directory names that match the spec (e.g., ['screening_module', 'storage_module'])")
     unmatched_spec_modules: list[str] = Field(default_factory=list, description="Module names from spec that couldn't be matched")
 
@@ -115,6 +116,7 @@ class StructuredCodeReviewAgent:
             self._llm = ChatOpenAI(
                 model=self.config.llm_model_name,
                 temperature=self.config.temperature,
+                top_p=self.config.top_p,
                 api_key=api_key,
                 base_url=self.config.llm_base_url,
             )
@@ -137,18 +139,17 @@ class StructuredCodeReviewAgent:
 
     def _extract_module_names_from_spec(self, spec_content: str) -> list[str]:
         """Extract module names from specification using LLM structured output."""
-        prompt = f"""Analyze the following specification and extract the names of modules that this specification defines or references.
+        prompt = f"""Analyze the following specification and extract the names of modules that this specification is directed towards to.
 
 Look for:
-- Module names mentioned in headers (e.g., "Модуль скрининга" → "screening_module")
-- Service/class names that indicate modules (e.g., "ScreeningService" → "screening_module")
-- Directory references or module paths
-- Any explicit module mentions
+- Module names mentioned in headers that are defined to be implemented by this specification
 
-Return ONLY the module directory names (e.g., "screening_module", "vacancy_module", "storage_module"), not the full descriptions.
+Pay attention that there can be also some mentions of existing modules that we are not interested in
+
+Return ONLY the module names (e.g., "модуль хранения", "storage module"), not the full descriptions.
 
 Specification:
-{spec_content[:4000]}  # Truncate if too long
+{spec_content[:4000]}  # Truncate as for now we suppose that module name is somewhere in the beginning
 
 If no modules are clearly identified, return an empty list with "low" confidence."""
         try:
@@ -158,6 +159,8 @@ If no modules are clearly identified, return an empty list with "low" confidence
             return []
 
         assert isinstance(module_data, ModuleNames)
+        logger.info(f"Extracted modules from specification {module_data.module_names} with reasoning: {module_data.reasoning}")
+
         self._log(
             f"Extracted module names from spec: {module_data.module_names} "
             f"(confidence: {module_data.confidence})"
@@ -185,19 +188,22 @@ If no modules are clearly identified, return an empty list with "low" confidence
         root = Path(code_root)
         available_modules = set()
 
-        # Look for src/*_module/ directories
+        # Look for src/ directories
         src_dir = root / "src"
         if src_dir.exists():
             for item in src_dir.iterdir():
-                if item.is_dir() and item.name.endswith("_module"):
+                if item.is_dir():  # and item.name.endswith("_module"):
                     available_modules.add(item.name)
 
-        # Look for tests/*_module/ directories
+        # Look for tests/ directories
         tests_dir = root / "tests"
         if tests_dir.exists():
             for item in tests_dir.iterdir():
-                if item.is_dir() and item.name.endswith("_module"):
+                if item.is_dir(): # and item.name.endswith("_module"):
                     available_modules.add(item.name)
+
+        # self._log(f"Available modules found: {available_modules}")
+        logger.info(f"Available modules found: {available_modules}")
 
         if not available_modules:
             self._log("No module directories found in code structure")
@@ -215,7 +221,7 @@ Available module directories in code:
 Your task:
 1. Match each specification module name to the corresponding directory name
 2. Consider variations (e.g., "screening" → "screening_module", "Модуль скрининга" → "screening_module")
-3. Consider partial matches (e.g., "storage" → "storage_module")
+3. Consider partial matches (e.g., "screening" → "screening_module")
 4. Return ONLY the matched directory names that exist in the code
 
 If a spec module name clearly matches a directory (even with variations), include it in matched_modules."""
@@ -225,10 +231,10 @@ If a spec module name clearly matches a directory (even with variations), includ
             logger.warning(f"Failed to match modules with code structure: {e}")
             matched_data = None
 
-        if isinstance(matched_data, MatchedModules):
-            matched_modules = matched_data.matched_modules
-        else:
-            matched_modules = []
+        assert isinstance(matched_data, MatchedModules)
+
+        matched_modules = matched_data.matched_modules
+        logger.info(f"Matched modules: {matched_data.matched_modules} with reasoning: {matched_data.reasoning}")
 
         if not matched_modules:
             for spec_name in spec_module_names:
@@ -547,9 +553,12 @@ For EACH issue listed above, you need to:
 - **error**: Critical issues that must be fixed
   - Missing required methods (signature_mismatch)
   - Code that will cause runtime failures
+  - Mocks instead of working code
+  - Code with try ... except Exception
+  - Large blocks of code under try ... except
   - Critical security or correctness issues
 - **warning**: Issues that should be addressed
-  - Code quality issues (broad exception handling)
+  - Code quality issues
   - Test quality issues (superficial tests)
   - Potential bugs or suboptimal patterns
 - **info**: Suggestions for improvement
@@ -572,7 +581,7 @@ For each issue, output:
   "line_number": <same as input or null>,
   "message": "<same as input>",
   "severity": "error|warning|info",
-  "suggestion": "<your suggestion for how to fix it>"
+  "suggestion": "<your suggestion for how to fix it, use best code practices>"
 }
 
 Respond with JSON:
@@ -598,11 +607,16 @@ Respond with JSON:
     def _extract_issues_deterministically(
         self,
         validation_results: dict[str, Any],
+        module_names: list[str] | None = None,
     ) -> list[ExtractedIssue]:
         """Extract all issues from validators deterministically.
 
         This phase extracts issues without LLM involvement, ensuring 100% consistency.
         Returns list of ExtractedIssue objects with category, file_path, line_number, message.
+
+        Args:
+            validation_results: Results from all validators
+            module_names: Optional list of module names to filter issues by
         """
         extracted_issues = []
 
@@ -649,6 +663,19 @@ Respond with JSON:
                             file_path = "unknown"
                     else:
                         file_path = "unknown"
+
+                # Filter by module names if provided
+                if module_names and file_path != "unknown":
+                    # Check if file belongs to any of the specified modules
+                    belongs_to_module = False
+                    for module_name in module_names:
+                        if f"src/{module_name}/" in file_path or f"tests/{module_name}/" in file_path:
+                            belongs_to_module = True
+                            break
+
+                    if not belongs_to_module:
+                        # Skip this issue - it's from a different module
+                        continue
 
                 # Extract line number
                 line_number = issue.get("line")
@@ -1015,7 +1042,10 @@ Respond with JSON:
         # Phase 2.5: Deterministic Issue Extraction
         phase_start = datetime.now()
         self._log("Phase 2.5: Deterministic Issue Extraction")
-        extracted_issues = self._extract_issues_deterministically(validation_results)
+        extracted_issues = self._extract_issues_deterministically(
+            validation_results,
+            module_names=module_names
+        )
         extraction_time = (datetime.now() - phase_start).total_seconds()
         self._log(f"  Extracted {len(extracted_issues)} issues deterministically in {extraction_time:.2f}s")
 
