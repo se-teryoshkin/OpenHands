@@ -4,8 +4,9 @@ import base64
 from collections.abc import AsyncGenerator
 from copy import copy
 from datetime import datetime, timezone, UTC
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Self
 from uuid import uuid4
+from pydantic import BaseModel, Field
 from a2a.server.events import Event as A2AEvent
 from a2a.types import (
     Artifact, MessageSendParams, Role, Task, TaskIdParams, TaskQueryParams, TaskState,
@@ -23,7 +24,7 @@ from openhands.events.action import (
     NullAction, SystemMessageAction, RecallAction, Action, ChangeAgentStateAction, MessageAction
 )
 from openhands.events.event import Event, EventSource
-
+from openhands.events.event_store import EventStore
 from openhands.events.observation import NullObservation
 from openhands.events.observation.agent import AgentStateChangedObservation, RecallObservation
 from openhands.events.serialization import event_to_dict
@@ -33,23 +34,35 @@ from openhands.server.services.conversation_service import create_new_conversati
 from openhands.server.session.agent_session import AgentSession
 from openhands.server.session.conversation_init_data import ConversationInitData
 from openhands.server.shared import (
-    SecretsStoreImpl, SettingsStoreImpl, config, server_config, conversation_manager
+    SecretsStoreImpl, SettingsStoreImpl, ConversationStoreImpl,
+    config, server_config,conversation_manager, file_store
 )
 from openhands.server.types import AppMode
+from openhands.storage.conversation.conversation_store import ConversationStore
 from openhands.storage.data_models.conversation_metadata import ConversationTrigger
 from openhands.storage.data_models.secrets import Secrets
+from openhands.storage.locations import get_task_filename, get_tasks_folder
+from openhands.utils.async_utils import call_async_from_sync
 
 
-TASK_TERMINAL_STATES = (TaskState.failed, TaskState.canceled, TaskState.completed, TaskState.rejected)
+TASK_TERMINAL_STATES = {TaskState.failed, TaskState.canceled, TaskState.completed, TaskState.rejected}
 METADATA_NAME_PREFIX = "openhands"
 AUTO_CONTINUE_RESPONSE = (
     'Please continue on whatever approach you think is suitable.\n'
     'If you think you have solved the task, please finish the interaction.\n'
     'IMPORTANT: YOU SHOULD NOT ASK FOR HUMAN RESPONSE UNTIL USER CONTACT YOU HIMSELF.\n'
 )
-
-
 A2A_SUBSCRIBE_ID = 'a2a_task_{task_id}'
+
+
+class TaskSave(BaseModel):
+    context_id: str
+    id: str
+    status: TaskStatus
+    min_event_id: int = -1
+    max_event_id: int = -1
+    metadata: dict[str, Any] | None = None
+    artifacts: list[Artifact] = Field(default_factory=list)
 
 
 class A2AOHTaskWrapper:
@@ -90,7 +103,6 @@ class A2AOHTaskWrapper:
         return (f"Task(id={self.task_id}, status={self.status}, "
                 f"history_length={len(self.history)}, metadata={self.metadata})")
 
-
     def update_status(
             self,
             state: TaskState,
@@ -125,6 +137,7 @@ class A2AOHTaskWrapper:
 
         if state in TASK_TERMINAL_STATES:
             self.is_finished = True
+        save_task(self, None)
 
     def to_response(self, history_length: int | None = None, show_all_events: bool | None = None) -> Task:
         if show_all_events is None:
@@ -198,30 +211,18 @@ class A2AOHTaskWrapper:
             artifacts=artifacts
         )
 
-    def on_event(self, event: Event) -> None:
+    @classmethod
+    def event_to_a2a_message(cls, context_id: str, task_id: str, event: Event) -> A2AMessage:
 
-        task_id = self.task_id
-        self.events[event.id] = event
-
-        if self.min_event_id < 0:
-            self.min_event_id = event.id
-
-        if event.id > self.max_event_id:
-            self.max_event_id = event.id
-
-        agent_state = getattr(event, "agent_state", "")
-
-        # FIXME: Catch user messages and replace with appropriate message_id
-        #  Otherwise it will duplicate user messages
-        message = A2AMessage(
+        return A2AMessage(
             role=Role.user if event.source == EventSource.USER else Role.agent,
 
-            # TODO: Добавить проверку на уникальность message_id
+            # TODO: Добавить проверку на уникальность message_id в рамках context_id
             message_id=(
                 getattr(event, "a2a_metadata", dict()).get("message_id", f"{task_id}-{event.id}")
             ),
 
-            context_id=self.context_id,
+            context_id=context_id,
 
             # TODO: Add multiple parts
             parts=[TextPart(text=event.message if event.message is not None else "")],
@@ -230,15 +231,27 @@ class A2AOHTaskWrapper:
             metadata={
                 f"{METADATA_NAME_PREFIX}/event-source": event.source,
                 f"{METADATA_NAME_PREFIX}/event-id": event.id,
-                f"{METADATA_NAME_PREFIX}/agent-state": agent_state,
+                f"{METADATA_NAME_PREFIX}/agent-state": getattr(event, "agent_state", ""),
                 f"{METADATA_NAME_PREFIX}/event-type": type(event).__name__,
                 f"{METADATA_NAME_PREFIX}/event-timestamp": event.timestamp,
             }
         )
 
+    def on_event(self, event: Event) -> None:
+
+        self.events[event.id] = event
+
+        if self.min_event_id < 0:
+            self.min_event_id = event.id
+
+        if event.id > self.max_event_id:
+            self.max_event_id = event.id
+
+        message = self.event_to_a2a_message(context_id=self.context_id, task_id=self.task_id, event=event)
+
         self.history.append(message)
 
-        match agent_state:
+        match (agent_state := getattr(event, "agent_state", "")):
             case AgentState.FINISHED:
                 self.update_status(TaskState.completed)
             case AgentState.STOPPED:
@@ -280,6 +293,7 @@ class A2AOHTaskWrapper:
                         artifact_id=uuid4().hex,
                         parts=[FilePart(file=file)]
                     ))
+            save_task(self, None)
 
             # Прямой вызов event_stream.unsubscribe невозможен, так как при его вызове
             # происходит thread_pool.shutdown() из того же потока, который находится в пуле,
@@ -350,11 +364,109 @@ class A2AOHTaskWrapper:
         except Exception as e:
             logger.error(f'Error zipping workspace: {e}')
 
+    def serialize(self) -> bytes:
+        return TaskSave(
+            context_id=self.context_id,
+            id=self.task_id,
+            status=self.status,
+            min_event_id = self.min_event_id,
+            max_event_id = self.max_event_id,
+            metadata=copy(self.metadata),
+            artifacts=copy(self.artifacts),
+        ).model_dump_json(exclude_none=True).encode(encoding="utf-8")
+
+    @classmethod
+    def deserialize(cls, data: bytes | str | bytearray, user_id: str | None) -> Self:
+        task_save = TaskSave.model_validate_json(data)
+
+        task = A2AOHTaskWrapper(
+            task_id=task_save.id,
+            context_id=task_save.context_id,
+            metadata=task_save.metadata,
+        )
+        task.min_event_id = task_save.min_event_id
+        task.max_event_id = task_save.max_event_id
+        task.status = task_save.status
+        task.artifacts = copy(task_save.artifacts)
+
+        context_id = task.context_id
+
+        events: dict[int, Event] = dict()
+        history: list[A2AMessage] = list()
+        if task_save.min_event_id > -1 and task_save.max_event_id > -1:
+            event_store = EventStore(
+                sid=context_id,
+                file_store=file_store,
+                user_id=user_id,
+            )
+
+            loaded_events = list(
+                event_store.search_events(
+                    start_id=task_save.min_event_id,
+                    end_id=task_save.max_event_id
+                )
+            )
+
+            task_id = task.task_id
+            for event in loaded_events:
+                message = cls.event_to_a2a_message(context_id, task_id, event)
+                events[event.id] = event
+                history.append(message)
+
+        task.events = events
+        task.history = history
+
+        if task.status.state == TaskState.working:
+            # TODO: Сделать обработку ситуации, где загруженный task в состоянии working
+            task.status.state = TaskState.unknown
+
+        return task
+
+
+def load_conversation_tasks(context_id: str, user_id: str | None) -> dict[str, A2AOHTaskWrapper]:
+    path = get_tasks_folder(context_id, user_id)
+
+    try:
+        files = file_store.list(path)
+    except FileNotFoundError as e:
+        logger.warning(f"No a2a tasks found for conversation {context_id} (path: {path})")
+        return dict()
+
+    tasks: dict[str, A2AOHTaskWrapper] = dict()
+    for filename in files:
+        try:
+            content = file_store.read(filename)
+            task = A2AOHTaskWrapper.deserialize(content, user_id)
+            tasks[task.task_id] = task
+        except Exception as e:
+            logger.error(f"Error during task load {filename} for conversation {context_id}. Reason: {e}")
+            continue
+    logger.debug(f"Loaded {len(tasks)} tasks for conversation {context_id}")
+    return tasks
+
+
+def load_conversations() -> dict[str, A2AOHTaskWrapper]:
+    loaded_tasks: dict[str, A2AOHTaskWrapper] = dict()
+    conversation_store: ConversationStore = call_async_from_sync(
+        ConversationStoreImpl.get_instance,
+        config=config,
+        user_id=None
+    )
+    conversations = call_async_from_sync(conversation_store.search, limit=1000)
+    conversations = [c.conversation_id for c in conversations.results]
+
+    for context_id in conversations:
+        loaded_tasks.update(load_conversation_tasks(context_id, None))
+
+    logger.debug(f"Loaded {len(loaded_tasks)} conversation tasks")
+    logger.debug(loaded_tasks)
+    return loaded_tasks
+
 
 class A2aRequestHandler:
 
     # task_id -> task
-    _tasks: dict[str, A2AOHTaskWrapper] = dict()
+    _tasks: dict[str, A2AOHTaskWrapper] = load_conversations()
 
     # context_id -> task
     _current_session_tasks: dict[str, A2AOHTaskWrapper] = dict()
@@ -387,7 +499,6 @@ class A2aRequestHandler:
         )
         task.update_status(TaskState.canceled)
         return task.to_response()
-
 
     async def on_message_send(
         self, params: MessageSendParams, context
@@ -440,6 +551,8 @@ class A2aRequestHandler:
             # Update state after the input-required next message
             if task.status.state == TaskState.input_required:
                 task.update_status(TaskState.working)
+
+            save_task(task, None)
 
             asyncio.create_task(
                 self.process_message(params, task)
@@ -636,3 +749,18 @@ class A2aRequestHandler:
         except Exception as e:
             logger.error(error_msg := f'Error adding message to conversation: {e}')
             task.update_status(TaskState.failed, text=error_msg)
+
+
+def save_task(task: A2AOHTaskWrapper, user_id: str | None):
+    task_json_bytes: bytes = task.serialize()
+    filename = get_task_filename(task.context_id, user_id, task.task_id)
+    if len(task_json_bytes) > 1_000_000:
+        logger.warning(
+            f'Saving task JSON over 1MB: {len(task_json_bytes):,} bytes, filename: {filename}',
+            extra={
+                'user_id': user_id,
+                'session_id': task.context_id,
+                'size': len(task_json_bytes),
+            },
+        )
+    file_store.write(filename, task_json_bytes)
