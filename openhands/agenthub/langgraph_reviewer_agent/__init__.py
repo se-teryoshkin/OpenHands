@@ -1,17 +1,8 @@
-# LangGraph-based Code Review Agent
-# This agent uses LangGraph's create_react_agent for structured code review
+# LangGraph-based Code Review Agent (Structured workflow)
 
 # Lazy imports to avoid loading heavy dependencies unless needed
 def __getattr__(name):
     """Lazy load modules to avoid import errors if langgraph not installed."""
-    if name in ("CodeReviewAgent", "create_review_agent", "run_review"):
-        from openhands.agenthub.langgraph_reviewer_agent.agent import (
-            CodeReviewAgent,
-            create_review_agent,
-            run_review,
-        )
-        return locals()[name]
-
     if name == "ReviewAgentConfig":
         from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
         return ReviewAgentConfig
@@ -29,17 +20,19 @@ def __getattr__(name):
         from openhands.agenthub.langgraph_reviewer_agent.pattern_scout_agent import PatternScoutAgent
         return PatternScoutAgent
 
+    if name == "StructuredCodeReviewAgent":
+        from openhands.agenthub.langgraph_reviewer_agent.structured_agent import StructuredCodeReviewAgent
+        return StructuredCodeReviewAgent
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
-    "CodeReviewAgent",
-    "create_review_agent",
-    "run_review",
     "ReviewAgentConfig",
     "ReviewComment",
     "ReviewResult",
     "IdentifiedPattern",
     "PatternIdentificationOutput",
     "PatternScoutAgent",
+    "StructuredCodeReviewAgent",
 ]

@@ -1219,7 +1219,7 @@ def test_agent_config_system_prompt_filename_toml_integration(
 enable_browsing = true
 system_prompt_filename = "custom_prompt.j2"
 
-[agent.CodeReviewAgent]
+[agent.StructuredCodeReviewAgent]
 system_prompt_filename = "code_review_prompt.j2"
 enable_browsing = false
 """
@@ -1233,6 +1233,6 @@ enable_browsing = false
     assert default_agent_config.enable_browsing is True
 
     # Check custom agent config
-    custom_agent_config = default_config.get_agent_config('CodeReviewAgent')
+    custom_agent_config = default_config.get_agent_config('StructuredCodeReviewAgent')
     assert custom_agent_config.system_prompt_filename == 'code_review_prompt.j2'
     assert custom_agent_config.enable_browsing is False

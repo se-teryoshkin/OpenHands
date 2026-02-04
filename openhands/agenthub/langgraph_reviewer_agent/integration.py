@@ -34,16 +34,15 @@ def generate_cr_feedback_for_agent(
     Returns:
         Formatted feedback string suitable for the coding agent.
     """
-    from openhands.agenthub.langgraph_reviewer_agent.agent import run_review
+    from openhands.agenthub.langgraph_reviewer_agent.structured_agent import StructuredCodeReviewAgent
 
-    result = run_review(
+    agent = StructuredCodeReviewAgent(config=config)
+    result = agent.review(
         spec_path=spec_path,
         code_root=code_root,
-        module_name=module_name,
-        config=config,
+        module_names=[module_name] if module_name else None,
         component_docs=component_docs,
     )
-
     return result.to_cr_feedback()
 
 
@@ -169,8 +168,8 @@ class CodeReviewRunner:
     def agent(self):
         """Get the agent instance, creating it if needed."""
         if self._agent is None:
-            from openhands.agenthub.langgraph_reviewer_agent.agent import CodeReviewAgent
-            self._agent = CodeReviewAgent(self.config)
+            from openhands.agenthub.langgraph_reviewer_agent.structured_agent import StructuredCodeReviewAgent
+            self._agent = StructuredCodeReviewAgent(self.config)
         return self._agent
 
     def run_review(
@@ -194,7 +193,7 @@ class CodeReviewRunner:
         result = self.agent.review(
             spec_path=spec_path,
             code_root=code_root,
-            module_name=module_name,
+            module_names=[module_name] if module_name else None,
             component_docs=component_docs,
         )
 

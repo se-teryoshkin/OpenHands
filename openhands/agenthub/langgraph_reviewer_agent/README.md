@@ -1,47 +1,29 @@
 # LangGraph Code Review Agent
 
-A code review agent built with LangGraph that automatically reviews generated code against specifications.
+A code review agent that reviews generated code against specifications using a structured workflow.
 
-## Two Agent Architectures
-
-### 1. StructuredCodeReviewAgent (Recommended) ⚡
-
-A deterministic workflow agent that is **6x faster** with **better quality**:
-
-| Metric | Structured | ReAct |
-|--------|------------|-------|
-| **Time** | ~15s | ~92s |
-| **Precision** | 45% | 33% |
-| **Recall** | 56% | 50% |
-| **F1 Score** | **50%** | 40% |
+## StructuredCodeReviewAgent
 
 **Workflow:**
-1. **Discovery** - Read spec and discover all files (parallel)
-2. **Validation** - Run all validators (parallel)
-3. **Analysis** - Single LLM call to interpret results
-4. **Report** - Generate structured output
 
-### 2. CodeReviewAgent (ReAct)
-
-The original ReAct-based agent with flexible reasoning:
-- Uses LangGraph's `create_react_agent`
-- More exploratory, can adapt to unexpected situations
-- Slower but potentially more thorough
+| Phase | Description |
+|-------|-------------|
+| **0** | **Module extraction** – LLM extracts module name(s) from the spec; matches them to code directories (e.g. `vacancy_module`). If `module_names` is passed, this step is skipped. |
+| **1** | **Discovery** – Find Python files under `code_root`, filtered by matched module(s). |
+| **2** | **Validation** – Run validators in parallel: signatures, test quality, code quality, Pydantic usage, project structure, cross-file usage. |
+| **2.5** | **Issue extraction** – Collect validator findings and filter by module. |
+| **3** | **LLM analysis** – One LLM call to assign severity and suggestions to each issue. |
+| **3a/3b** *(optional)* | **Pattern review** – If `pattern_guidelines_path` is set: a ReAct pattern-scout agent reads the codebase and reports design patterns; a second LLM call evaluates them against the guidelines and adds `design_pattern` issues. |
+| **4** | **Report** – Build `ReviewResult` (passed, comments, summary, files_reviewed). |
 
 ## Features
 
-- **Two Agent Options**: Choose between fast structured workflow or flexible ReAct
-- **ReAct Pattern**: Uses LangGraph's `create_react_agent` for structured reasoning and action
-- **Specification-based Review**: Validates code against provided specifications
-- **Multiple Validation Types**:
-  - Signature validation (method names, parameters, return types)
-  - Field access validation (detecting access to non-existent fields)
-  - Data mapping validation (ensuring complete model mappings)
-  - Test quality analysis (coverage, mocking detection)
-  - Project structure validation
-- **Configurable LLM**: Uses separate environment variables for the review model
-- **Streaming Support**: Watch the agent work in real-time
-- **Pipeline Integration**: Easy to integrate with the main coding agent
+- **Module-scoped review**: Infers target module from the spec and only reviews that module’s files.
+- **Structured workflow**: Deterministic, fast, no tool loop.
+- **Validators**: Signatures, test quality, code quality, Pydantic usage, project structure, cross-file usage (all run in parallel).
+- **Optional pattern review**: With a pattern-guidelines folder (e.g. python-patterns-master), runs pattern identification and evaluation and adds design-pattern issues.
+- **Configurable LLM**: Uses `GPT_OSS_*` (or equivalent) environment variables.
+- **Pipeline integration**: `generate_cr_feedback_for_agent`, `CodeReviewRunner`, `quick_review`.
 
 ## Installation
 
@@ -71,21 +53,43 @@ export GPT_OSS_MODEL_NAME="gpt-4o"  # or your preferred model
 
 ## Usage
 
-### Command Line
+### Command line (example script)
+
+The recommended way to run a review is the example script, which supports all options (context files, pattern guidelines, external components):
 
 ```bash
-# Basic usage
+cd /path/to/OpenHands
+poetry run python examples/code_review_agent/run_review.py
+
+# With options (defaults point to test_data)
+poetry run python examples/code_review_agent/run_review.py \
+  --spec test_data/module_M4/M4.md \
+  --code test_data/module_M4/M4_lvm_run \
+  --output examples/code_review_agent/review_report.md \
+  --data-structures test_data/api_data_structures.md \
+  --guidelines test_data/guidelines/Agentic\ Coding\ Hints\ React\ Best\ Practices.md \
+  --modules-description test_data/modules_description.md \
+  --external-components test_data/AppFactory-components \
+  --pattern-guidelines /path/to/python-patterns-master \
+  --debug
+```
+
+- **`--spec`** – Specification file (required).
+- **`--code`** – Generated code (directory or zip).
+- **`--output`** – Report file (.md and .json).
+- **`--data-structures`**, **`--guidelines`**, **`--modules-description`** – Optional context files.
+- **`--external-components`** – Path to external package (e.g. AppFactory) for resolving imports; not validated.
+- **`--pattern-guidelines`** – Path to pattern-guidelines folder (README.md + linked .md) to enable design-pattern review.
+- **`--debug`** – Verbose logging and pattern-review LLM messages.
+
+### Command line (module runner)
+
+```bash
+# Basic usage (module names inferred from spec)
 python -m openhands.agenthub.langgraph_reviewer_agent.runner \
     --spec /path/to/spec.md \
     --code /path/to/generated/code \
     --module ModuleName
-
-# With streaming output
-python -m openhands.agenthub.langgraph_reviewer_agent.runner \
-    --spec /path/to/spec.md \
-    --code /path/to/code \
-    --module ModuleName \
-    --stream --verbose
 
 # JSON output
 python -m openhands.agenthub.langgraph_reviewer_agent.runner \
@@ -102,63 +106,31 @@ python -m openhands.agenthub.langgraph_reviewer_agent.runner \
     --test-tools
 ```
 
+Note: `--stream` is accepted but the structured agent does not stream; it runs a full review and prints a note.
+
 ### Python API
 
 ```python
-# RECOMMENDED: Use StructuredCodeReviewAgent (6x faster)
-from openhands.agenthub.langgraph_reviewer_agent import ReviewAgentConfig
-from openhands.agenthub.langgraph_reviewer_agent.structured_agent import (
-    StructuredCodeReviewAgent,
-)
+from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
+from openhands.agenthub.langgraph_reviewer_agent.structured_agent import StructuredCodeReviewAgent
 
-config = ReviewAgentConfig()
+config = ReviewAgentConfig.from_env()
 agent = StructuredCodeReviewAgent(config, verbose=True)
 
 result = agent.review(
     spec_path="/path/to/spec.md",
     code_root="/path/to/code",
-    module_name="MyModule",
+    module_names=None,       # auto-extract from spec; or e.g. ["vacancy_module"]
+    data_structures=None,    # optional: API/model docs
+    coding_guidelines=None,  # optional: coding rules
+    modules_description=None,
+    external_components_path=None,  # optional: path to external package for imports
+    pattern_guidelines_path=None,   # optional: path to pattern-guidelines folder
 )
 
 print(result.to_markdown())
-
-# Alternative: ReAct agent (more flexible, slower)
-from openhands.agenthub.langgraph_reviewer_agent import (
-    CodeReviewAgent,
-    ReviewAgentConfig,
-    run_review,
-)
-
-# Simple usage with ReAct
-result = run_review(
-    spec_path="/path/to/spec.md",
-    code_root="/path/to/code",
-    module_name="MyModule",
-)
-
-print(result.to_markdown())
-
-# With custom configuration
-config = ReviewAgentConfig(
-    llm_model_name="gpt-4o-mini",
-    temperature=0.0,
-    strict_mode=True,
-)
-
-agent = CodeReviewAgent(config)
-result = agent.review(
-    spec_path="/path/to/spec.md",
-    code_root="/path/to/code",
-    module_name="MyModule",
-)
-
-# Check results
-if result.passed:
-    print("Review passed!")
-else:
-    print(f"Found {result.error_count} errors")
-    for comment in result.comments:
-        print(f"- {comment.message}")
+# result.passed, result.comments, result.summary, result.files_reviewed
+# result.error_count, result.warning_count, result.info_count
 ```
 
 ### Pipeline Integration
@@ -196,127 +168,53 @@ print(f"Total reviews: {summary['total_reviews']}")
 print(f"Passed: {summary['passed']}")
 ```
 
-### Using Additional Context Documents
+### Context and options
 
-The agent can leverage additional documentation for more thorough reviews:
+- **`data_structures`** – API/Pydantic model docs; used to check implementation models and avoid duplicate definitions.
+- **`coding_guidelines`** – Coding rules; the LLM uses them when assigning severity and suggestions.
+- **`modules_description`** – High-level module architecture; used for scope checks.
+- **`external_components_path`** – Path to an external package (e.g. AppFactory) so imports resolve; that code is not validated.
+- **`module_names`** – If `None`, module names are inferred from the spec (Phase 0); otherwise only these directories are reviewed (e.g. `["vacancy_module"]`).
+- **`pattern_guidelines_path`** – Path to a folder with `README.md` and linked `.md` pattern descriptions; enables Phase 3a/3b and `design_pattern` issues.
 
-```python
-from pathlib import Path
-from openhands.agenthub.langgraph_reviewer_agent import (
-    CodeReviewAgent,
-    ReviewAgentConfig,
-)
+## Validators (used in Phase 2)
 
-agent = CodeReviewAgent()
+The structured agent runs these validators in parallel (per file where applicable):
 
-# Load context documents
-data_structures = Path("test_data/api_data_structures.md").read_text()
-guidelines = Path("test_data/guidelines/coding_guidelines.md").read_text()
-modules_desc = Path("test_data/modules_description.md").read_text()
+- **`validate_signatures_tool`** – Method names, parameters, return types vs spec
+- **`validate_test_quality_tool`** – Test coverage, superficial tests, mocking
+- **`validate_code_quality_tool`** – Anti-patterns (bare except, exception suppression, mocks in prod)
+- **`validate_pydantic_usage_tool`** – Pydantic usage and duplicate model definitions
+- **`validate_project_structure_tool`** – File layout and misplaced files
+- **`validate_cross_file_usage_tool`** – Cross-file references and invalid member access
 
-# Run review with additional context
-result = agent.review(
-    spec_path="/path/to/spec.md",
-    code_root="/path/to/code",
-    module_name="MyModule",
-    # Optional context documents
-    data_structures=data_structures,        # API Pydantic model definitions
-    coding_guidelines=guidelines,            # Coding best practices/rules
-    modules_description=modules_desc,        # High-level module architecture
-)
-```
+Discovery uses `find_python_files_tool` and file reads. The **pattern scout** (Phase 3a, when pattern review is on) uses `find_python_files_tool`, `read_file_tool`, and `list_files_tool` to read the codebase, then `report_patterns_tool` for structured output.
 
-**Context Document Types:**
+## Issue categories
 
-1. **API Data Structures** (`data_structures`):
-   - Pydantic model definitions for API request/response schemas
-   - Agent validates implementation models match these definitions
-   - Checks field types, optionality, and naming
+- `signature_mismatch` – Method signatures don’t match the spec
+- `test_quality` – Test coverage or quality (e.g. superficial tests)
+- `code_quality_issue` – Anti-patterns (bare except, exception suppression, mocks in prod)
+- `pydantic_issue` – Pydantic usage / duplicate model definitions
+- `structure_issue` – File organization / misplaced files
+- `cross_file_issue` – Invalid cross-file or member access
+- `design_pattern` – Pattern usage does not match the guideline (when pattern review is enabled)
+- `guideline_violation`, `scope_violation`, `field_access_error`, `field_mapping_error`, `missing_implementation`, `type_error`, `data_structure_mismatch`, `general`
 
-2. **Coding Guidelines** (`coding_guidelines`):
-   - Best practices and coding standards
-   - Agent checks for guideline violations
-   - Examples: "no manual agent loops", "tools must be real"
+## Output format
 
-3. **Module Architecture** (`modules_description`):
-   - High-level description of module responsibilities
-   - Agent validates implementation scope matches description
-   - Flags out-of-scope functionality
+`ReviewResult` has: `passed`, `comments`, `summary`, `files_reviewed`, and properties `error_count`, `warning_count`, `info_count`.
 
-## Available Tools
+### Markdown
 
-The agent uses these LangChain tools:
+`result.to_markdown()` produces a report with status, summary, statistics, files reviewed, and issues grouped by category (each with severity, file, line, message, suggestion).
 
-### File Operations
-- `read_file_tool`: Read file contents
-- `list_files_tool`: List directory contents
-- `find_python_files_tool`: Find and categorize Python files
+### JSON
 
-### Code Analysis
-- `extract_signatures_tool`: Extract class/method signatures using AST
-- `extract_field_accesses_tool`: Find all field accesses in code
-- `extract_test_info_tool`: Analyze test files
-
-### Validators
-- `validate_signatures_tool`: Check signature compliance with spec
-- `validate_field_access_tool`: Verify field accesses are valid
-- `validate_mapping_tool`: Check data model mappings
-- `validate_model_field_mapping_tool`: Detailed field-level mapping validation
-- `validate_test_quality_tool`: Assess test coverage and quality (detects superficial tests)
-- `validate_code_quality_tool`: Detect anti-patterns (bare except, exception suppression, mocks in prod)
-- `validate_structure_tool`: Verify project organization
-
-### Reporting
-- `create_review_comment_tool`: Record individual issues
-- `finalize_review_tool`: Generate final review report
-
-## Issue Categories
-
-- `signature_mismatch`: Method signatures don't match specification
-- `field_access_error`: Accessing non-existent fields on objects
-- `mapping_incomplete`: Missing required field mappings
-- `field_mapping_error`: Field-level mapping issues (missing required fields in data transformations)
-- `test_quality`: Test coverage or quality issues (superficial tests using only `hasattr()`)
-- `structure_issue`: File organization problems
-- `missing_implementation`: Required features not implemented
-- `type_error`: Type annotation issues
-- `pydantic_issue`: Issues with Pydantic model usage
-- `code_quality_issue`: Anti-patterns (bare except, exception suppression, mocks in production)
-- `guideline_violation`: Code violates provided coding guidelines
-- `scope_violation`: Module implements functionality outside its defined scope
-- `data_structure_mismatch`: Implementation models don't match API data structure definitions
-- `general`: Other issues
-
-## Output Format
-
-### Markdown Report
-
-```markdown
-# Code Review: MyModule
-**Status:** ❌ FAILED
-
-**Summary:** Found issues with method signatures and test coverage.
-
-**Statistics:**
-- 🔴 Errors: 2
-- 🟡 Warnings: 1
-- 🔵 Info: 0
-
-## Issues
-
-### Signature Mismatch
-
-🔴 **[ERROR]** Method 'process_data' has incorrect parameter types
-   - File: `src/mymodule/service.py`
-   - Line: 45
-   - 💡 Suggestion: Change parameter 'data' type from str to dict
-```
-
-### JSON Output
+`result.model_dump_json()` (or `model_dump()`) yields:
 
 ```json
 {
-  "module_name": "MyModule",
   "passed": false,
   "comments": [
     {
@@ -328,86 +226,56 @@ The agent uses these LangChain tools:
       "suggestion": "Change parameter 'data' type from str to dict"
     }
   ],
-  "files_reviewed": ["src/mymodule/service.py", "tests/test_mymodule.py"],
-  "statistics": {
-    "errors": 2,
-    "warnings": 1,
-    "info": 0,
-    "total": 3
-  }
+  "summary": "Brief summary of the review.",
+  "files_reviewed": ["src/mymodule/service.py", "tests/test_mymodule.py"]
 }
 ```
 
 ## Architecture
 
-### StructuredCodeReviewAgent (Recommended)
-
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│               StructuredCodeReviewAgent (6x faster)             │
+│                    StructuredCodeReviewAgent                     │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Phase 1: DISCOVERY                                             │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │  Read Spec  │    │ Find Files  │    │ Read Files  │         │
-│  └─────────────┘    └─────────────┘    └─────────────┘         │
-│         │                  │                  │                 │
-│         └──────────────────┴──────────────────┘                 │
-│                           │                                     │
-│  Phase 2: VALIDATION      ▼                                     │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Parallel Validators (no LLM calls)                      │  │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │  │
-│  │  │Signatures│ │ Code     │ │ Test     │ │ Pydantic │    │  │
-│  │  │Validator │ │ Quality  │ │ Quality  │ │ Validator│    │  │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘    │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                           │                                     │
-│  Phase 3: ANALYSIS        ▼                                     │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │        Single LLM Call (Structured Output)               │  │
-│  │        Interpret validation results → Issues             │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                           │                                     │
-│  Phase 4: REPORT          ▼                                     │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │              ReviewResult (Pydantic Model)               │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│  Phase 0: MODULE EXTRACTION                                     │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  LLM: extract module name(s) from spec → match to dirs   │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                           │                                      │
+│  Phase 1: DISCOVERY       ▼                                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │  Read Spec  │  │ Find Files  │  │ Read Files  │ (by module)  │
+│  └─────────────┘  └─────────────┘  └─────────────┘             │
+│                           │                                      │
+│  Phase 2: VALIDATION      ▼                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Parallel: signatures, test quality, code quality,        │   │
+│  │  pydantic, project structure, cross-file usage             │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                           │                                      │
+│  Phase 2.5: EXTRACT ISSUES ▼ (filter by module)                  │
+│                           │                                      │
+│  Phase 3: LLM ANALYSIS   ▼                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Single LLM: severity + suggestions per issue             │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                           │                                      │
+│  Phase 3a/3b (optional)  ▼ if pattern_guidelines_path           │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Pattern scout (ReAct) → identify patterns                │   │
+│  │  LLM → evaluate vs guidelines → design_pattern issues     │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                           │                                      │
+│  Phase 4: REPORT         ▼                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  ReviewResult (passed, comments, summary, files_reviewed) │   │
+│  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
-```
-
-### CodeReviewAgent (ReAct)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    CodeReviewAgent (ReAct)                   │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
-│  │   LangChain │    │  LangGraph  │    │   Review    │     │
-│  │   ChatOpenAI│───▶│  ReAct Agent│───▶│   Result    │     │
-│  └─────────────┘    └─────────────┘    └─────────────┘     │
-│                            │                                │
-│                            ▼                                │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │                      Tools                            │  │
-│  │                                                       │  │
-│  │  ┌─────────┐  ┌───────────┐  ┌───────────────────┐   │  │
-│  │  │  File   │  │   Code    │  │    Validators     │   │  │
-│  │  │  Tools  │  │  Analyzer │  │                   │   │  │
-│  │  └─────────┘  └───────────┘  └───────────────────┘   │  │
-│  │                                                       │  │
-│  │  ┌───────────────────────────────────────────────┐   │  │
-│  │  │              Report Tools                      │   │  │
-│  │  └───────────────────────────────────────────────┘   │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Development
 
-### Running Tests
+### Running tests
 
 ```bash
 # Test tools without LLM
@@ -417,33 +285,14 @@ python -m openhands.agenthub.langgraph_reviewer_agent.runner \
     --module ModuleName \
     --test-tools
 
-# Full integration test
-python test_data/test_review_agent.py
+# Run the example review (uses test_data defaults)
+poetry run python examples/code_review_agent/run_review.py --debug
 ```
 
-### Adding New Tools
+### Adding a new validator
 
-1. Create the tool function in the appropriate file under `tools/`
-2. Use the `@tool` decorator from `langchain_core.tools`
-3. Add the tool to `tools/__init__.py`
-4. The agent will automatically include it
+To add a new validator to the structured agent:
 
-Example:
-
-```python
-from langchain_core.tools import tool
-
-@tool
-def my_validation_tool(file_path: str, pattern: str) -> str:
-    """Validate something in the code.
-
-    Args:
-        file_path: Path to the file.
-        pattern: Pattern to check.
-
-    Returns:
-        JSON string with validation results.
-    """
-    # Implementation
-    return json.dumps({"valid": True})
-```
+1. Implement the validator in `tools/validators.py` (or a new tool module) using `@tool` from `langchain_core.tools`.
+2. In `structured_agent.py`, import it and add it to the list passed to `_run_validators` (and map its result in `_extract_issues_deterministically` if the output shape differs).
+3. Optionally add a category in `models.IssueCategory` and map it in the category_map inside `_extract_issues_deterministically`.

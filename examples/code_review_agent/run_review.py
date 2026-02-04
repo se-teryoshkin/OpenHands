@@ -16,15 +16,11 @@ Uses environment variables from .env file:
     GPT_OSS_MODEL_NAME - Model name served by vLLM
 
 Usage:
-    # Run with StructuredCodeReviewAgent (default, recommended)
     cd /Users/ngc436/Documents/projects/OpenHands
     poetry run python examples/code_review_agent/run_review.py
 
-    # Or with debug logging to see all agent steps
+    # With debug logging to see all agent steps
     poetry run python examples/code_review_agent/run_review.py --debug
-
-    # Use ReAct agent instead (slower, more exploratory)
-    poetry run python examples/code_review_agent/run_review.py --react
 
 The example uses:
 - Module specification: test_data/module_M4/M4.md
@@ -110,7 +106,6 @@ def run_review_example(
     modules_description_path: Path | None = None,
     external_components_path: Path | None = None,
     pattern_guidelines_path: Path | None = None,
-    use_react: bool = False,
     quiet: bool = False,
 ):
     """Run the code review example.
@@ -126,9 +121,7 @@ def run_review_example(
         external_components_path: Optional path to external components directory (e.g., AppFactory-components).
                                   Used to resolve imports but NOT validated.
         pattern_guidelines_path: Optional path to pattern guidelines folder (e.g. python-patterns-master with
-                                  README.md and linked pattern descriptions). Structured agent only.
-        use_react: If True, use ReAct CodeReviewAgent (slower, more exploratory).
-                  Default is False, using StructuredCodeReviewAgent (faster, better quality).
+                                  README.md and linked pattern descriptions).
     """
     # Check for required environment variables
     api_key = os.getenv("GPT_OSS_KEY")
@@ -151,18 +144,12 @@ def run_review_example(
         print(f"   GPT_OSS_KEY: {'*' * 8}...{api_key[-4:] if len(api_key) > 4 else '****'}")
         print(f"   GPT_OSS_MODEL_NAME: {model_name or 'not set (will use default)'}")
 
-    # Import the agent (after checking API key to fail fast)
-    agent_type = "ReAct" if use_react else "Structured"
     if not quiet:
-        print(f"🔧 Loading {agent_type} Code Review Agent...")
+        print("🔧 Loading Structured Code Review Agent...")
 
     try:
-        # Always import both agents (imports are cheap, avoids type checker issues)
         from openhands.agenthub.langgraph_reviewer_agent.structured_agent import (
             StructuredCodeReviewAgent,
-        )
-        from openhands.agenthub.langgraph_reviewer_agent.agent import (
-            CodeReviewAgent,
         )
         from openhands.agenthub.langgraph_reviewer_agent.config import (
             ReviewAgentConfig,
@@ -207,14 +194,9 @@ def run_review_example(
             print()
             print(f"🤖 Using model: {config.llm_model_name}")
             print(f"🌐 API endpoint: {config.llm_base_url}")
-            print(f"⚡ Agent type: {agent_type} {'(6x faster, better quality)' if not use_react else '(exploratory)'}")
             print()
 
-        # Create agent - StructuredCodeReviewAgent is the default
-        if use_react:
-            agent = CodeReviewAgent(config, debug=debug)
-        else:
-            agent = StructuredCodeReviewAgent(config, verbose=debug)
+        agent = StructuredCodeReviewAgent(config, verbose=debug)
 
         # Load additional context documents
         data_structures = None
@@ -263,14 +245,11 @@ def run_review_example(
                 "coding_guidelines": coding_guidelines,
                 "modules_description": modules_description,
             }
-            # Only StructuredCodeReviewAgent supports external_components_path, module_names, pattern_guidelines_path
-            if not use_react:
-                if external_components:
-                    review_kwargs["external_components_path"] = external_components
-                if pattern_guidelines:
-                    review_kwargs["pattern_guidelines_path"] = pattern_guidelines
-                # module_names=None means auto-extract from spec (handled by agent)
-                review_kwargs["module_names"] = None
+            if external_components:
+                review_kwargs["external_components_path"] = external_components
+            if pattern_guidelines:
+                review_kwargs["pattern_guidelines_path"] = pattern_guidelines
+            review_kwargs["module_names"] = None  # auto-extract from spec
 
             result = agent.review(**review_kwargs)
         except Exception as e:
@@ -388,11 +367,6 @@ def main():
         default=None,
         help="Path to pattern guidelines folder (e.g. python-patterns-master with README.md and pattern .md links)",
     )
-    parser.add_argument(
-        "--react", "-r",
-        action="store_true",
-        help="Use ReAct CodeReviewAgent instead of StructuredCodeReviewAgent (slower, more exploratory)",
-    )
 
     args = parser.parse_args()
 
@@ -419,7 +393,6 @@ def main():
         modules_description_path=args.modules_description,
         external_components_path=args.external_components,
         pattern_guidelines_path=args.pattern_guidelines,
-        use_react=args.react,
     )
 
     sys.exit(exit_code)

@@ -127,7 +127,6 @@ def main():
             coding_guidelines_path=args.guidelines,
             modules_description_path=args.modules_description,
             external_components_path=args.external_components,
-            use_react=False,
             quiet=True,  # Suppress verbose output during batch runs
         )
         elapsed_time = time.time() - start_time

@@ -120,10 +120,10 @@ def main():
 
     # Import here to avoid slow startup for --help
     from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
-    from openhands.agenthub.langgraph_reviewer_agent.agent import CodeReviewAgent
+    from openhands.agenthub.langgraph_reviewer_agent.structured_agent import StructuredCodeReviewAgent
 
     # Create config
-    config = ReviewAgentConfig()
+    config = ReviewAgentConfig.from_env()
 
     # Apply overrides
     if args.model:
@@ -143,63 +143,41 @@ def main():
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Create agent
-    agent = CodeReviewAgent(config)
+    # Create agent (StructuredCodeReviewAgent; module_names from spec)
+    agent = StructuredCodeReviewAgent(config, verbose=args.verbose)
 
     if args.verbose:
         print(f"Using model: {config.llm_model_name}", file=sys.stderr)
         print(f"API base URL: {config.llm_base_url}", file=sys.stderr)
 
-    # Run review
+    # Run review (StructuredCodeReviewAgent has no streaming; module_names filters by spec)
     if args.stream:
-        print("Starting review...", file=sys.stderr)
-        for event_type, content in agent.review_with_streaming(
-            str(spec_path),
-            str(code_path),
-            args.module,
-            component_docs,
-        ):
-            if event_type == "tool_call":
-                print(f"  🔧 {content}", file=sys.stderr)
-            elif event_type == "thought":
-                if args.verbose and content:
-                    print(f"  💭 {content[:100]}...", file=sys.stderr)
-            elif event_type == "final":
-                # Parse and format the final result
-                try:
-                    result_data = json.loads(content)
-                    output = format_result(result_data, args.output)
-                except json.JSONDecodeError:
-                    output = content
+        print("Note: Streaming not available for StructuredCodeReviewAgent, running full review.", file=sys.stderr)
+    print("Running review...", file=sys.stderr)
+    result = agent.review(
+        spec_path=str(spec_path),
+        code_root=str(code_path),
+        module_names=[args.module] if args.module else None,
+        component_docs=component_docs,
+    )
 
-                write_output(output, args.output_file)
+    if args.output == "markdown":
+        output = result.to_markdown()
     else:
-        print("Running review...", file=sys.stderr)
-        result = agent.review(
-            str(spec_path),
-            str(code_path),
-            args.module,
-            component_docs,
-        )
+        output = result.model_dump_json(indent=2)
 
-        if args.output == "markdown":
-            output = result.to_markdown()
-        else:
-            output = result.model_dump_json(indent=2)
+    write_output(output, args.output_file)
 
-        write_output(output, args.output_file)
+    # Print summary
+    print(file=sys.stderr)
+    status = "✅ PASSED" if result.passed else "❌ FAILED"
+    print(f"Review {status}", file=sys.stderr)
+    print(f"  Errors: {result.error_count}", file=sys.stderr)
+    print(f"  Warnings: {result.warning_count}", file=sys.stderr)
+    print(f"  Info: {result.info_count}", file=sys.stderr)
 
-        # Print summary
-        print(file=sys.stderr)
-        status = "✅ PASSED" if result.passed else "❌ FAILED"
-        print(f"Review {status}", file=sys.stderr)
-        print(f"  Errors: {result.error_count}", file=sys.stderr)
-        print(f"  Warnings: {result.warning_count}", file=sys.stderr)
-        print(f"  Info: {result.info_count}", file=sys.stderr)
-
-        # Exit code based on result
-        if not result.passed:
-            sys.exit(1)
+    if not result.passed:
+        sys.exit(1)
 
 
 def format_result(result_data: dict, format_type: str) -> str:
