@@ -1647,20 +1647,42 @@ def _extract_packages_from_pyproject(code_root: Path) -> set[str]:
         return set()
 
 
+def _find_dependency_root(code_root: Path) -> Path:
+    """Return the directory that contains pyproject.toml or poetry.lock.
+
+    When generated code is passed to review, code_root may be the extraction
+    directory (e.g. temp dir) with the actual project in a single subdirectory
+    (e.g. code_root/M4_lvm_run/pyproject.toml). This helper checks code_root
+    first, then each immediate subdirectory, so dependency files are found either way.
+    """
+    if not code_root.exists() or not code_root.is_dir():
+        return code_root
+    if (code_root / "pyproject.toml").exists() or (code_root / "poetry.lock").exists():
+        return code_root
+    subdirs = [p for p in code_root.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    for sub in subdirs:
+        if (sub / "pyproject.toml").exists() or (sub / "poetry.lock").exists():
+            return sub
+    return code_root
+
+
 def _extract_known_packages(code_root: Path) -> set[str]:
     """Extract known package names from dependency files.
 
     Checks poetry.lock (preferred, includes transitive deps) and pyproject.toml (fallback).
+    Looks at code_root and, if needed, one level of subdirectories (so generated code
+    extracted to a subdir still has its pyproject.toml/poetry.lock seen).
     Also includes common stdlib packages.
     """
     packages = set()
+    dep_root = _find_dependency_root(code_root)
 
     # Try poetry.lock first (most complete)
-    packages.update(_extract_packages_from_poetry_lock(code_root))
+    packages.update(_extract_packages_from_poetry_lock(dep_root))
 
     # Fallback to pyproject.toml if poetry.lock not found
     if not packages:
-        packages.update(_extract_packages_from_pyproject(code_root))
+        packages.update(_extract_packages_from_pyproject(dep_root))
 
     # Add common stdlib packages as fallback
     stdlib_packages = {
@@ -1901,6 +1923,12 @@ def validate_cross_file_usage_tool(
                 infer_calls += 1
                 inferred_attr = script.infer(line, idx + len(attr))
                 if inferred_attr:
+                    continue
+
+                # Skip private/class attributes (e.g. cls._instance in singletons). Jedi often
+                # cannot resolve these when they are set dynamically; reporting them is noisy
+                # and causes false positives for valid patterns.
+                if attr.startswith("_"):
                     continue
 
                 # Infer base only if simple name; keep precision high

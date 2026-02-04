@@ -1,11 +1,6 @@
 """Structured Workflow Code Review Agent.
 
 This agent uses a deterministic workflow with parallel tool execution
-and a single LLM call for analysis, providing:
-- ~5x faster execution than ReAct
-- Consistent behavior (always runs all validators)
-- Lower cost (1-2 LLM calls vs 15-20)
-- Predictable results
 """
 
 import json
@@ -43,6 +38,7 @@ logger = logging.getLogger("code_review_agent")
 
 class ReviewIssue(BaseModel):
     """Single issue found during review."""
+    issue_id: int | None = Field(default=None, description="Unique issue ID for reference in output")
     category: str = Field(description="Issue category: signature_mismatch, test_quality, code_quality_issue, pydantic_issue, structure_issue, missing_implementation, field_mapping_error, cross_file_issue, general")
     severity: str = Field(description="Severity: error, warning, info")
     file_path: str = Field(description="Path to the file with the issue")
@@ -176,7 +172,7 @@ class StructuredCodeReviewAgent:
 Look for:
 - Module names mentioned in headers that are defined to be implemented by this specification
 
-Pay attention that there can be also some mentions of existing modules that we are not interested in
+Pay attention that there can be also some mentions of existing modules that we are not interested in.
 
 Return ONLY the module names (e.g., "модуль хранения", "storage module"), not the full descriptions.
 
@@ -622,7 +618,11 @@ The following issues were found deterministically. You MUST process ALL of them 
 
 For EACH issue ID, you need to:
 1. **Assign severity**: error (must fix), warning (should fix), info (suggestion)
-2. **Generate suggestion**: How to fix the issue
+2. **Generate suggestion**: A concrete, self-contained suggestion for how to fix this specific issue.
+
+**Suggestion rules:**
+- Write the full fix in the suggestion; do NOT reference other issues (e.g. do NOT say "Same as ID 13" or "See issue 5").
+- Each suggestion must stand alone so the developer can act on it without looking up another issue.
 
 **Severity Assignment Rules:**
 - **error**: Critical issues that must be fixed
@@ -654,7 +654,7 @@ Respond with JSON:
     {
       "issue_id": <integer ID from input>,
       "severity": "error|warning|info",
-      "suggestion": "<your suggestion for how to fix it>"
+      "suggestion": "<concrete, self-contained fix for this issue only; do not reference other issue IDs>"
     },
     ...
   ],
@@ -764,6 +764,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         self,
         identified_patterns: list[IdentifiedPattern],
         evaluation_output: PatternEvaluationOutput,
+        start_issue_id: int | None = None,
     ) -> list[ReviewIssue]:
         """Convert pattern evaluations (where is_correct=False) to ReviewIssue list."""
         evals_by_name_file: dict[tuple[str, str], PatternEvaluationItem] = {}
@@ -771,7 +772,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
             evals_by_name_file[(ev.pattern_name, ev.file_path)] = ev
 
         issues: list[ReviewIssue] = []
-        for pat in identified_patterns:
+        for idx, pat in enumerate(identified_patterns):
             ev = evals_by_name_file.get((pat.pattern_name, pat.file_path))
             if ev is None or ev.is_correct:
                 continue
@@ -781,7 +782,9 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                 f"Classes/functions: {', '.join(pat.class_or_function_names)}. "
                 + (f"Guideline: {ev.guideline_reference}" if ev.guideline_reference else "")
             )
+            issue_id = (start_issue_id + idx) if start_issue_id is not None else None
             issues.append(ReviewIssue(
+                issue_id=issue_id,
                 category="design_pattern",
                 severity="warning",
                 file_path=pat.file_path,
@@ -952,6 +955,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
             if llm_issue:
                 # Use LLM's severity and suggestion
                 merged_issues.append(ReviewIssue(
+                    issue_id=extracted.issue_id,
                     category=extracted.category,
                     severity=llm_issue.severity,
                     file_path=extracted.file_path,
@@ -966,6 +970,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                     f"{extracted.category} in {extracted.file_path}"
                 )
                 merged_issues.append(ReviewIssue(
+                    issue_id=extracted.issue_id,
                     category=extracted.category,
                     severity="warning",  # Default severity
                     file_path=extracted.file_path,
@@ -982,6 +987,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
             )
             merged_issues = [
                 ReviewIssue(
+                    issue_id=extracted.issue_id,
                     category=extracted.category,
                     severity="warning",
                     file_path=extracted.file_path,
@@ -1006,6 +1012,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         """Create fallback output when LLM fails, using extracted issues with default severity."""
         issues = [
             ReviewIssue(
+                issue_id=extracted.issue_id,
                 category=extracted.category,
                 severity="warning",  # Default severity
                 file_path=extracted.file_path,
@@ -1113,6 +1120,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                 line_number=issue.line_number,
                 message=issue.message,
                 suggestion=issue.suggestion,
+                issue_id=issue.issue_id,
             ))
 
         return ReviewResult(
@@ -1126,7 +1134,6 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         self,
         spec_path: str,
         code_root: str,
-        component_docs: str | None = None,
         data_structures: str | None = None,
         coding_guidelines: str | None = None,
         modules_description: str | None = None,
@@ -1148,7 +1155,6 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         Args:
             spec_path: Path to specification file
             code_root: Root directory of code to review
-            component_docs: Optional component documentation
             data_structures: Optional API data structures
             coding_guidelines: Optional coding guidelines
             modules_description: Optional modules description
@@ -1299,9 +1305,13 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                                 ev.is_correct,
                                 (ev.suggestion or "")[:200],
                             )
+                    next_id = (
+                        max((i.issue_id for i in llm_output.issues if i.issue_id is not None), default=0) + 1
+                    )
                     pattern_issues = self._pattern_evaluations_to_issues(
                         identification.patterns,
                         evaluation,
+                        start_issue_id=next_id,
                     )
                     if pattern_issues:
                         llm_output.issues.extend(pattern_issues)

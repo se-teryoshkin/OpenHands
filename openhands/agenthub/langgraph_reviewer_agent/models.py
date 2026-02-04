@@ -74,6 +74,10 @@ class ReviewComment(BaseModel):
         default=None,
         description="Reference to the specification that was violated"
     )
+    issue_id: Optional[int] = Field(
+        default=None,
+        description="Unique issue ID for reference (e.g. in suggestions)"
+    )
 
     def to_markdown(self) -> str:
         """Format as markdown comment."""
@@ -83,9 +87,10 @@ class ReviewComment(BaseModel):
             IssueSeverity.INFO: "🔵",
         }
         emoji = severity_emoji.get(self.severity, "⚪")
+        id_prefix = f"**ID {self.issue_id}** " if self.issue_id is not None else ""
 
         lines = [
-            f"{emoji} **[{self.severity.value.upper()}]** {self.message}",
+            f"{emoji} {id_prefix}**[{self.severity.value.upper()}]** {self.message}",
             f"   - File: `{self.file_path}`",
         ]
 
