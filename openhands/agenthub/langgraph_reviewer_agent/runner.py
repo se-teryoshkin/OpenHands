@@ -158,7 +158,6 @@ def main():
         spec_path=str(spec_path),
         code_root=str(code_path),
         module_names=[args.module] if args.module else None,
-        component_docs=component_docs,
     )
 
     if args.output == "markdown":

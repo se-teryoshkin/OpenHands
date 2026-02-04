@@ -148,8 +148,7 @@ def run_review(
             "issue_count": len(result.comments),
             "issues": [
                 {
-                    "file": c.file_path,
-                    "line": c.line_number,
+                    "locations": [{"file": loc.file_path, "line": loc.line_number} for loc in c.locations],
                     "category": c.category.value if hasattr(c.category, 'value') else str(c.category),
                     "severity": c.severity.value if hasattr(c.severity, 'value') else str(c.severity),
                     "message": c.message,
