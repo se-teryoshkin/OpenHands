@@ -16,7 +16,7 @@ Uses environment variables from .env file:
     GPT_OSS_MODEL_NAME - Model name served by vLLM
 
 Usage:
-    cd /Users/ngc436/Documents/projects/OpenHands
+    cd OpenHands
     poetry run python examples/code_review_agent/run_review.py
 
     # With debug logging to see all agent steps
@@ -100,6 +100,7 @@ def run_review_example(
     spec_path: Path,
     code_zip_path: Path,  # Can be zip file or directory
     debug: bool = False,
+    verbose: bool = False,
     output_file: Path | None = None,
     data_structures_path: Path | None = None,
     coding_guidelines_path: Path | None = None,
@@ -114,6 +115,7 @@ def run_review_example(
         spec_path: Path to the specification file.
         code_zip_path: Path to the zip file with generated code.
         debug: Enable debug logging.
+        verbose: Enable verbose agent output (phase logs, timings).
         output_file: Optional path to write the report.
         data_structures_path: Optional path to API data structures file.
         coding_guidelines_path: Optional path to coding guidelines file.
@@ -196,7 +198,7 @@ def run_review_example(
             print(f"🌐 API endpoint: {config.llm_base_url}")
             print()
 
-        agent = StructuredCodeReviewAgent(config, verbose=debug)
+        agent = StructuredCodeReviewAgent(config, verbose=verbose or debug)
 
         # Load additional context documents
         data_structures = None
@@ -315,9 +317,14 @@ def main():
     )
 
     parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose agent output (phase logs, timings). Use --debug for full debug logging.",
+    )
+    parser.add_argument(
         "--debug", "-d",
         action="store_true",
-        help="Enable debug logging to see all agent steps and tool calls",
+        help="Enable debug logging and verbose agent output (see all agent steps and tool calls)",
     )
     parser.add_argument(
         "--spec",
@@ -382,11 +389,12 @@ def main():
         print(f"❌ Code file or directory not found: {args.code}")
         sys.exit(1)
 
-    # Run the review
+    # Run the review (verbose = agent phase logs; debug = logging.DEBUG + verbose)
     exit_code = run_review_example(
         spec_path=args.spec,
         code_zip_path=args.code,
         debug=args.debug,
+        verbose=args.verbose,
         output_file=args.output,
         data_structures_path=args.data_structures,
         coding_guidelines_path=args.guidelines,

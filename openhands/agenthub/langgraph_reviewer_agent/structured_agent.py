@@ -18,6 +18,7 @@ from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
 from openhands.agenthub.langgraph_reviewer_agent.models import (
     IdentifiedPattern,
     IssueCategory,
+    IssueLocation,
     IssueSeverity,
     PatternIdentificationOutput,
     ReviewComment,
@@ -41,8 +42,7 @@ class ReviewIssue(BaseModel):
     issue_id: int | None = Field(default=None, description="Unique issue ID for reference in output")
     category: str = Field(description="Issue category: signature_mismatch, test_quality, code_quality_issue, pydantic_issue, structure_issue, missing_implementation, field_mapping_error, cross_file_issue, general")
     severity: str = Field(description="Severity: error, warning, info")
-    file_path: str = Field(description="Path to the file with the issue")
-    line_number: int | None = Field(default=None, description="Line number if applicable")
+    locations: list[IssueLocation] = Field(default_factory=list, description="File/line locations for this issue")
     message: str = Field(description="Clear description of the issue")
     suggestion: str | None = Field(default=None, description="How to fix the issue")
 
@@ -58,8 +58,7 @@ class ExtractedIssue(BaseModel):
     """Issue extracted deterministically from validator output."""
     issue_id: int  # Unique ID for matching with LLM output
     category: str
-    file_path: str
-    line_number: int | None
+    locations: list[IssueLocation] = Field(default_factory=list, description="File/line locations for this issue")
     message: str
     validator_name: str
     validator_issue: dict[str, Any]  # Original validator issue for context
@@ -411,7 +410,7 @@ If a spec module name clearly matches a directory (even with variations), includ
                 return (name, json.loads(result))
             return (name, result)
         except Exception as e:
-            logger.debug(f"Validator {name} failed: {e}")
+            logger.warning(f"Validator {name} failed: {e}")
             return (name, {"error": str(e)})
 
     def _extract_interface_from_spec(self, spec_content: str) -> str:
@@ -576,12 +575,16 @@ If a spec module name clearly matches a directory (even with variations), includ
         modules_description: str = "",
     ) -> str:
         """Build the prompt for LLM analysis."""
-        # Prepare extracted issues list for LLM (minimal - only ID, category, file, and message)
+        # Prepare extracted issues list for LLM (minimal - ID, category, location(s), message)
         issues_list = []
         for issue in extracted_issues:
-            line_str = f" (line {issue.line_number})" if issue.line_number else ""
+            if issue.locations:
+                loc_parts = [f"{loc.file_path}:{loc.line_number}" if loc.line_number is not None else loc.file_path for loc in issue.locations]
+                loc_str = " | ".join(loc_parts)
+            else:
+                loc_str = "unknown"
             issues_list.append(
-                f"ID {issue.issue_id}: [{issue.category}] {issue.file_path}{line_str} - {issue.message[:200]}"
+                f"ID {issue.issue_id}: [{issue.category}] {loc_str} - {issue.message[:200]}"
             )
 
         prompt = f"""You are a code review expert. Your task is to assign severity levels and generate suggestions for the issues found by validators.
@@ -776,7 +779,11 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
             ev = evals_by_name_file.get((pat.pattern_name, pat.file_path))
             if ev is None or ev.is_correct:
                 continue
-            line_number = pat.line_numbers[0] if pat.line_numbers else None
+            locations = (
+                [IssueLocation(file_path=pat.file_path, line_number=ln) for ln in pat.line_numbers]
+                if pat.line_numbers
+                else [IssueLocation(file_path=pat.file_path, line_number=None)]
+            )
             message = (
                 f"Pattern '{pat.pattern_name}' usage does not match the guideline. "
                 f"Classes/functions: {', '.join(pat.class_or_function_names)}. "
@@ -787,8 +794,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                 issue_id=issue_id,
                 category="design_pattern",
                 severity="warning",
-                file_path=pat.file_path,
-                line_number=line_number,
+                locations=locations,
                 message=message.strip(),
                 suggestion=ev.suggestion,
             ))
@@ -802,7 +808,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         """Extract all issues from validators deterministically.
 
         This phase extracts issues without LLM involvement, ensuring 100% consistency.
-        Returns list of ExtractedIssue objects with category, file_path, line_number, message.
+        Returns list of ExtractedIssue objects with category, locations, message.
 
         Args:
             validation_results: Results from all validators
@@ -854,21 +860,80 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                     else:
                         file_path = "unknown"
 
-                # Filter by module names if provided
-                if module_names and file_path != "unknown":
-                    # Check if file belongs to any of the specified modules
+                # Use issue["locations"] when validator provides it (e.g. duplicate_model: list of {file, line})
+                locations: list[IssueLocation] = []
+                raw_locs = issue.get("locations")
+                if raw_locs and isinstance(raw_locs, list) and len(raw_locs) > 0:
+                    loc0 = raw_locs[0]
+                    if isinstance(loc0, dict):
+                        locations = [
+                            IssueLocation(
+                                file_path=(loc.get("file") or loc.get("file_path") or "").strip() or "unknown",
+                                line_number=loc.get("line") if loc.get("line") is not None else loc.get("line_number"),
+                            )
+                            for loc in raw_locs
+                        ]
+                    else:
+                        raw_locs = None  # fall through to normal extraction
+                else:
+                    raw_locs = None
+
+                if raw_locs is None:
+                    # Extract line number(s): single "line" or list "lines" (same file); optional "files" for multiple files
+                    line_number = issue.get("line")
+                    lines_list = issue.get("lines")
+                    if lines_list is not None and isinstance(lines_list, list):
+                        line_numbers = [ln for ln in lines_list if ln is not None]
+                    else:
+                        line_numbers = [line_number] if line_number is not None else []
+
+                    extra_files = issue.get("files")
+                    if extra_files is not None and not isinstance(extra_files, list):
+                        extra_files = [extra_files]
+                    if not extra_files:
+                        extra_files = []
+
+                    if line_numbers:
+                        if extra_files and len(extra_files) == len(line_numbers):
+                            locations = [
+                                IssueLocation(
+                                    file_path=(extra_files[i] or "").strip() or "unknown",
+                                    line_number=line_numbers[i],
+                                )
+                                for i in range(len(line_numbers))
+                            ]
+                        else:
+                            locations = [
+                                IssueLocation(
+                                    file_path=file_path or "unknown",
+                                    line_number=ln,
+                                )
+                                for ln in line_numbers
+                            ]
+                    else:
+                        locations = [
+                            IssueLocation(
+                                file_path=file_path or "unknown",
+                                line_number=line_number,
+                            )
+                        ]
+
+                # Filter by module names if provided (use first location's file).
+                # Only exclude when path clearly lies under src/<other>/ or tests/<other>/ with other not in module_names.
+                # Include paths that don't use src/ or tests/ (e.g. top-level or flat layout) so cross-file issues aren't dropped.
+                primary_file = locations[0].file_path if locations else "unknown"
+                if module_names and primary_file and primary_file != "unknown":
+                    primary_norm = primary_file.replace("\\", "/") if isinstance(primary_file, str) else primary_file
                     belongs_to_module = False
-                    for module_name in module_names:
-                        if f"src/{module_name}/" in file_path or f"tests/{module_name}/" in file_path:
-                            belongs_to_module = True
-                            break
-
-                    if not belongs_to_module:
-                        # Skip this issue - it's from a different module
-                        continue
-
-                # Extract line number
-                line_number = issue.get("line")
+                    # Paths under src/<name>/ or tests/<name>/: only keep if name is in module_names
+                    if "src/" in primary_norm or "tests/" in primary_norm:
+                        for module_name in module_names:
+                            if f"src/{module_name}/" in primary_norm or f"tests/{module_name}/" in primary_norm:
+                                belongs_to_module = True
+                                break
+                        if not belongs_to_module:
+                            continue
+                    # Else: path has no src/ or tests/ (e.g. flat layout); don't filter out, include the issue
 
                 # Extract message
                 message = issue.get("message", str(issue))
@@ -878,8 +943,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                 extracted_issues.append(ExtractedIssue(
                     issue_id=issue_id,
                     category=category,
-                    file_path=file_path,
-                    line_number=line_number,
+                    locations=locations,
                     message=message,
                     validator_name=validator_name,
                     validator_issue=issue,
@@ -958,23 +1022,22 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                     issue_id=extracted.issue_id,
                     category=extracted.category,
                     severity=llm_issue.severity,
-                    file_path=extracted.file_path,
-                    line_number=extracted.line_number,
+                    locations=extracted.locations,
                     message=extracted.message,
                     suggestion=llm_issue.suggestion,
                 ))
             else:
                 # LLM didn't provide output for this issue, use defaults
+                primary = extracted.locations[0].file_path if extracted.locations else "unknown"
                 logger.warning(
                     f"LLM didn't provide severity/suggestion for issue ID {extracted.issue_id}: "
-                    f"{extracted.category} in {extracted.file_path}"
+                    f"{extracted.category} in {primary}"
                 )
                 merged_issues.append(ReviewIssue(
                     issue_id=extracted.issue_id,
                     category=extracted.category,
                     severity="warning",  # Default severity
-                    file_path=extracted.file_path,
-                    line_number=extracted.line_number,
+                    locations=extracted.locations,
                     message=extracted.message,
                     suggestion=None,
                 ))
@@ -990,8 +1053,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                     issue_id=extracted.issue_id,
                     category=extracted.category,
                     severity="warning",
-                    file_path=extracted.file_path,
-                    line_number=extracted.line_number,
+                    locations=extracted.locations,
                     message=extracted.message,
                     suggestion=None,
                 )
@@ -1015,8 +1077,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                 issue_id=extracted.issue_id,
                 category=extracted.category,
                 severity="warning",  # Default severity
-                file_path=extracted.file_path,
-                line_number=extracted.line_number,
+                locations=extracted.locations,
                 message=extracted.message,
                 suggestion=None,
             )
@@ -1108,16 +1169,20 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
             except ValueError:
                 severity = IssueSeverity.WARNING
 
-            # Normalize file path to be relative to code_root
-            # Safety check: ensure file_path is not None (should be handled by sanitization)
-            file_path = issue.file_path or "unknown"
-            normalized_path = self._normalize_file_path(file_path)
+            normalized_locations = [
+                IssueLocation(
+                    file_path=self._normalize_file_path(loc.file_path),
+                    line_number=loc.line_number,
+                )
+                for loc in (issue.locations or [])
+            ]
+            if not normalized_locations:
+                normalized_locations = [IssueLocation(file_path="unknown", line_number=None)]
 
             comments.append(ReviewComment(
                 category=category,
                 severity=severity,
-                file_path=normalized_path,
-                line_number=issue.line_number,
+                locations=normalized_locations,
                 message=issue.message,
                 suggestion=issue.suggestion,
                 issue_id=issue.issue_id,
@@ -1229,11 +1294,19 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
             self._file_path_mapping[f"test_quality_{file_name}"] = file_path
             self._file_path_mapping[f"code_quality_{file_name}"] = file_path
 
-        # Count issues from validators
+        # Count issues from validators and log per-validator (always at INFO so user can see why cross-file etc. is empty)
         total_validator_issues = 0
         for name, result in validation_results.items():
-            if isinstance(result, dict) and "issues" in result:
-                total_validator_issues += len(result["issues"])
+            if not isinstance(result, dict):
+                logger.info(f"  Validator {name}: no result dict")
+                continue
+            if "error" in result:
+                logger.info(f"  Validator {name}: error - {result['error'][:120]}")
+                continue
+            issues_in_result = result.get("issues", [])
+            count = len(issues_in_result)
+            total_validator_issues += count
+            logger.info(f"  Validator {name}: {count} issues")
         self._log(f"  Validators found {total_validator_issues} potential issues")
 
         # Phase 2.5: Deterministic Issue Extraction

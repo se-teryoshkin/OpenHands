@@ -47,6 +47,12 @@ class PatternIdentificationOutput(BaseModel):
     patterns: list[IdentifiedPattern] = Field(default_factory=list, description="All design patterns found in the code")
 
 
+class IssueLocation(BaseModel):
+    """A single file/line location for an issue (one issue can have multiple locations)."""
+    file_path: str = Field(description="Path to the file")
+    line_number: Optional[int] = Field(default=None, description="Line number in the file, if applicable")
+
+
 class ReviewComment(BaseModel):
     """A single review comment/issue."""
 
@@ -56,12 +62,9 @@ class ReviewComment(BaseModel):
     severity: IssueSeverity = Field(
         description="Severity level of the issue"
     )
-    file_path: str = Field(
-        description="Path to the file with the issue"
-    )
-    line_number: Optional[int] = Field(
-        default=None,
-        description="Line number where the issue occurs"
+    locations: list[IssueLocation] = Field(
+        default_factory=list,
+        description="File/line locations for this issue (one or more)"
     )
     message: str = Field(
         description="Description of the issue"
@@ -91,11 +94,14 @@ class ReviewComment(BaseModel):
 
         lines = [
             f"{emoji} {id_prefix}**[{self.severity.value.upper()}]** {self.message}",
-            f"   - File: `{self.file_path}`",
         ]
 
-        if self.line_number:
-            lines.append(f"   - Line: {self.line_number}")
+        for loc in self.locations:
+            lines.append(f"   - File: `{loc.file_path}`")
+            if loc.line_number is not None:
+                lines.append(f"   - Line: {loc.line_number}")
+        if not self.locations:
+            lines.append("   - File: `unknown`")
 
         if self.spec_reference:
             lines.append(f"   - Spec: {self.spec_reference}")
@@ -201,10 +207,12 @@ class ReviewResult(BaseModel):
 
         for i, comment in enumerate(self.comments, 1):
             lines.append(f"{i}. [{comment.severity.value.upper()}] {comment.message}")
-            if comment.file_path:
-                lines.append(f"   File: {comment.file_path}")
-            if comment.line_number:
-                lines.append(f"   Line: {comment.line_number}")
+            for loc in comment.locations:
+                lines.append(f"   File: {loc.file_path}")
+                if loc.line_number is not None:
+                    lines.append(f"   Line: {loc.line_number}")
+            if not comment.locations:
+                lines.append("   File: unknown")
             if comment.suggestion:
                 lines.append(f"   Suggestion: {comment.suggestion}")
             lines.append("")

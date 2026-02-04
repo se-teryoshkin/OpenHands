@@ -7,9 +7,10 @@ def __getattr__(name):
         from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
         return ReviewAgentConfig
 
-    if name in ("ReviewComment", "ReviewResult", "IdentifiedPattern", "PatternIdentificationOutput"):
+    if name in ("ReviewComment", "ReviewResult", "IdentifiedPattern", "PatternIdentificationOutput", "IssueLocation"):
         from openhands.agenthub.langgraph_reviewer_agent.models import (
             IdentifiedPattern,
+            IssueLocation,
             PatternIdentificationOutput,
             ReviewComment,
             ReviewResult,
@@ -32,6 +33,7 @@ __all__ = [
     "ReviewComment",
     "ReviewResult",
     "IdentifiedPattern",
+    "IssueLocation",
     "PatternIdentificationOutput",
     "PatternScoutAgent",
     "StructuredCodeReviewAgent",

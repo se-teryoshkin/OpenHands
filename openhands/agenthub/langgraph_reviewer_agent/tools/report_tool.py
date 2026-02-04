@@ -76,12 +76,9 @@ def create_review_comment_tool(
     comment = {
         "category": category,
         "severity": severity,
-        "file_path": file_path,
+        "locations": [{"file_path": file_path, "line_number": line_number}],
         "message": message,
     }
-
-    if line_number is not None:
-        comment["line_number"] = str(line_number)
 
     if suggestion:
         comment["suggestion"] = suggestion
@@ -90,14 +87,12 @@ def create_review_comment_tool(
         comment["spec_reference"] = spec_reference
 
     # Deduplication: Check if similar comment already exists
-    # Comments are considered duplicates if they have the same message core
-    # (ignoring minor variations) and same file
-    message_core = message.lower().strip()[:100]  # First 100 chars for comparison
+    message_core = message.lower().strip()[:100]
     for existing in _review_comments:
         existing_core = existing.get("message", "").lower().strip()[:100]
-        if (existing_core == message_core and
-            existing.get("file_path") == file_path and
-            existing.get("category") == category):
+        existing_locs = existing.get("locations") or []
+        existing_file = existing_locs[0].get("file_path") if existing_locs else None
+        if (existing_core == message_core and existing_file == file_path and existing.get("category") == category):
             return f"Duplicate comment skipped: [{severity.upper()}] {message[:50]}... (already recorded)"
 
     _review_comments.append(comment)
@@ -193,9 +188,15 @@ def finalize_review_tool(
                     f"{emoji} **[{comment.get('severity', 'info').upper()}]** "
                     f"{comment.get('message', '')}"
                 )
-                markdown_lines.append(f"   - File: `{comment.get('file_path', 'unknown')}`")
-                if comment.get("line_number"):
-                    markdown_lines.append(f"   - Line: {comment.get('line_number')}")
+                locs = comment.get("locations") or []
+                for loc in locs:
+                    fp = loc.get("file_path", "unknown") if isinstance(loc, dict) else getattr(loc, "file_path", "unknown")
+                    ln = loc.get("line_number") if isinstance(loc, dict) else getattr(loc, "line_number", None)
+                    markdown_lines.append(f"   - File: `{fp}`")
+                    if ln is not None:
+                        markdown_lines.append(f"   - Line: {ln}")
+                if not locs:
+                    markdown_lines.append("   - File: `unknown`")
                 if comment.get("suggestion"):
                     markdown_lines.append(f"   - 💡 Suggestion: {comment.get('suggestion')}")
                 markdown_lines.append("")
