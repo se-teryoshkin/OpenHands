@@ -16,12 +16,18 @@ def __getattr__(name):
         from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
         return ReviewAgentConfig
 
-    if name in ("ReviewComment", "ReviewResult"):
+    if name in ("ReviewComment", "ReviewResult", "IdentifiedPattern", "PatternIdentificationOutput"):
         from openhands.agenthub.langgraph_reviewer_agent.models import (
+            IdentifiedPattern,
+            PatternIdentificationOutput,
             ReviewComment,
             ReviewResult,
         )
         return locals()[name]
+
+    if name == "PatternScoutAgent":
+        from openhands.agenthub.langgraph_reviewer_agent.pattern_scout_agent import PatternScoutAgent
+        return PatternScoutAgent
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -33,4 +39,7 @@ __all__ = [
     "ReviewAgentConfig",
     "ReviewComment",
     "ReviewResult",
+    "IdentifiedPattern",
+    "PatternIdentificationOutput",
+    "PatternScoutAgent",
 ]

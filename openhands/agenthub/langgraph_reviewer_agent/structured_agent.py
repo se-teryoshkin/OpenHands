@@ -21,11 +21,14 @@ from pydantic import BaseModel, Field, SecretStr
 
 from openhands.agenthub.langgraph_reviewer_agent.config import ReviewAgentConfig
 from openhands.agenthub.langgraph_reviewer_agent.models import (
+    IdentifiedPattern,
     IssueCategory,
     IssueSeverity,
+    PatternIdentificationOutput,
     ReviewComment,
     ReviewResult,
 )
+from openhands.agenthub.langgraph_reviewer_agent.pattern_scout_agent import PatternScoutAgent
 from openhands.agenthub.langgraph_reviewer_agent.tools.validators import (
     validate_signatures_tool,
     validate_test_quality_tool,
@@ -92,6 +95,20 @@ class MatchedModules(BaseModel):
     reasoning: str = Field(description="Reasoning behind the match between module name in the specification with direct quote(s) and module names from code")
     matched_modules: list[str] = Field(description="List of module directory names that match the spec (e.g., ['screening_module', 'storage_module'])")
     unmatched_spec_modules: list[str] = Field(default_factory=list, description="Module names from spec that couldn't be matched")
+
+
+class PatternEvaluationItem(BaseModel):
+    """Evaluation of one identified pattern against the guideline."""
+    pattern_name: str = Field(description="Name of the pattern (must match identification)")
+    file_path: str = Field(description="File where the pattern was found")
+    is_correct: bool = Field(description="True if the implementation matches the guideline; False otherwise")
+    suggestion: str | None = Field(default=None, description="If not correct: proposed pattern or changes strictly according to the guideline; otherwise null")
+    guideline_reference: str | None = Field(default=None, description="Relevant part of the guideline that was violated or followed")
+
+
+class PatternEvaluationOutput(BaseModel):
+    """Output from the pattern evaluation step."""
+    evaluations: list[PatternEvaluationItem] = Field(default_factory=list, description="Evaluation for each identified pattern")
 
 
 class StructuredCodeReviewAgent:
@@ -339,6 +356,56 @@ If a spec module name clearly matches a directory (even with variations), includ
             path = file_info["path"]
             contents[path] = self._read_file(path)
         return contents
+
+    def _load_pattern_guidelines(self, pattern_guidelines_path: str | Path) -> str:
+        """Load pattern guidelines from a folder (e.g. python-patterns-master).
+
+        Reads README.md and all linked .md files referenced in it (relative links).
+        Returns concatenated text for use in pattern evaluation.
+        """
+        root = Path(pattern_guidelines_path).resolve()
+        if not root.is_dir():
+            return f"Error: not a directory: {root}"
+
+        readme_path = root / "README.md"
+        if not readme_path.exists():
+            readme_path = root / "readme.md"
+        if not readme_path.exists():
+            return f"Error: README.md not found in {root}"
+
+        try:
+            readme_content = readme_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return f"Error reading README: {e}"
+
+        # Find all markdown links: [text](path) or [text](path.md)
+        link_pattern = re.compile(r'\[([^\]]+)\]\(([^)]+\.md)\)')
+        seen: set[Path] = {readme_path.resolve()}
+        parts = [f"# Pattern guidelines index (README)\n\n{readme_content}"]
+        total_chars = len(parts[0])
+        max_total_chars = 80_000  # Cap to avoid token overflow
+
+        for _label, rel_path in link_pattern.findall(readme_content):
+            rel_path = rel_path.strip()
+            if not rel_path or rel_path.startswith("http"):
+                continue
+            file_path = (root / rel_path).resolve()
+            if not file_path.is_file() or file_path in seen:
+                continue
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            seen.add(file_path)
+            part = f"\n\n# Pattern: {file_path.name}\n\n{text}"
+            if total_chars + len(part) > max_total_chars:
+                part = part[: max_total_chars - total_chars] + "\n\n[... truncated]"
+            parts.append(part)
+            total_chars += len(part)
+            if total_chars >= max_total_chars:
+                break
+
+        return "".join(parts)
 
     def _run_single_validator(self, name: str, func: Callable, args: dict) -> tuple[str, Any]:
         """Run a single validator and return (name, result)."""
@@ -597,6 +664,132 @@ Respond with JSON:
 """
 
         return prompt
+
+    def _build_pattern_identification_prompt(
+        self,
+        spec_content: str,
+        file_contents: dict[str, str],
+    ) -> str:
+        """Build prompt for step 1: identify all design patterns in the code."""
+        code_blobs = []
+        for path, content in list(file_contents.items())[:30]:  # Limit files
+            short_path = Path(path).name
+            code_blobs.append(f"### File: {path}\n```python\n{content[:4000]}\n```")
+        code_section = "\n\n".join(code_blobs)
+
+        return f"""You are a senior developer analyzing code for design patterns.
+
+## Specification (context)
+```
+{spec_content[:2500]}
+```
+
+## Code to analyze
+{code_section}
+
+## Your task
+1. Look through the code (and infer from connected modules if needed) and identify all design patterns used.
+2. For each pattern found, report:
+   - pattern_name: canonical name of the pattern (e.g., Singleton, Factory, Adapter)
+   - file_path: full path to the file
+   - line_numbers: list of relevant line numbers where the pattern is evident
+   - class_or_function_names: names of classes or functions that implement or use this pattern
+   - rationale: brief explanation of why this pattern is used here
+
+Include only patterns that are clearly present (e.g., a single shared instance, factory function, protocol/interface). Do not list generic OOP unless it is a named pattern.
+If no clear design patterns are found, return an empty list.
+"""
+
+    def _build_pattern_evaluation_prompt(
+        self,
+        identified_patterns: list[IdentifiedPattern],
+        pattern_guidelines: str,
+    ) -> str:
+        """Build prompt for step 2: evaluate each pattern against the guideline."""
+        patterns_text = "\n\n".join(
+            f"- Pattern: {p.pattern_name}\n  File: {p.file_path}\n  Lines: {p.line_numbers}\n  Classes/functions: {p.class_or_function_names}\n  Rationale: {p.rationale}"
+            for p in identified_patterns
+        )
+        return f"""You are a code reviewer. Evaluate each identified pattern against the official pattern guidelines below.
+
+## Identified patterns in the code
+{patterns_text}
+
+## Pattern guidelines (README + linked pattern descriptions)
+{pattern_guidelines[:60000]}
+
+## Your task
+For EACH identified pattern:
+1. Look up the corresponding pattern in the guidelines (by name or close match).
+2. Decide: does the code's use of this pattern match the guideline? (is_correct: true/false)
+3. If not correct: provide a suggestion strictly based on the guideline (proposed pattern or concrete changes). Set guideline_reference to the relevant guideline excerpt.
+4. If correct: set suggestion and guideline_reference to null.
+
+Output one evaluation per identified pattern, in the same order. Be strict: only set is_correct=true when the implementation aligns with the guideline.
+"""
+
+    def _run_pattern_identification(
+        self,
+        spec_content: str,
+        file_contents: dict[str, str],
+    ) -> PatternIdentificationOutput:
+        """Step 1: LLM identifies all design patterns in the code."""
+        prompt = self._build_pattern_identification_prompt(spec_content, file_contents)
+        try:
+            out = self._invoke_structured_output(PatternIdentificationOutput, prompt)
+            assert isinstance(out, PatternIdentificationOutput)
+            return out
+        except Exception as e:
+            logger.warning(f"Pattern identification failed: {e}")
+            return PatternIdentificationOutput(patterns=[])
+
+    def _run_pattern_evaluation(
+        self,
+        identified_patterns: list[IdentifiedPattern],
+        pattern_guidelines: str,
+    ) -> PatternEvaluationOutput:
+        """Step 2: LLM evaluates each pattern against the guidelines."""
+        if not identified_patterns:
+            return PatternEvaluationOutput(evaluations=[])
+        prompt = self._build_pattern_evaluation_prompt(identified_patterns, pattern_guidelines)
+        try:
+            out = self._invoke_structured_output(PatternEvaluationOutput, prompt)
+            assert isinstance(out, PatternEvaluationOutput)
+            return out
+        except Exception as e:
+            logger.warning(f"Pattern evaluation failed: {e}")
+            return PatternEvaluationOutput(evaluations=[])
+
+    def _pattern_evaluations_to_issues(
+        self,
+        identified_patterns: list[IdentifiedPattern],
+        evaluation_output: PatternEvaluationOutput,
+    ) -> list[ReviewIssue]:
+        """Convert pattern evaluations (where is_correct=False) to ReviewIssue list."""
+        evals_by_name_file: dict[tuple[str, str], PatternEvaluationItem] = {}
+        for ev in evaluation_output.evaluations:
+            evals_by_name_file[(ev.pattern_name, ev.file_path)] = ev
+
+        issues: list[ReviewIssue] = []
+        for pat in identified_patterns:
+            ev = evals_by_name_file.get((pat.pattern_name, pat.file_path))
+            if ev is None or ev.is_correct:
+                continue
+            line_number = pat.line_numbers[0] if pat.line_numbers else None
+            message = (
+                f"Pattern '{pat.pattern_name}' usage does not match the guideline. "
+                f"Classes/functions: {', '.join(pat.class_or_function_names)}. "
+                + (f"Guideline: {ev.guideline_reference}" if ev.guideline_reference else "")
+            )
+            issues.append(ReviewIssue(
+                category="design_pattern",
+                severity="warning",
+                file_path=pat.file_path,
+                line_number=line_number,
+                message=message.strip(),
+                suggestion=ev.suggestion,
+            ))
+        return issues
 
     def _extract_issues_deterministically(
         self,
@@ -939,6 +1132,7 @@ Respond with JSON:
         modules_description: str | None = None,
         external_components_path: str | None = None,
         module_names: list[str] | None = None,
+        pattern_guidelines_path: str | Path | None = None,
     ) -> ReviewResult:
         """Run a structured code review.
 
@@ -947,6 +1141,8 @@ Respond with JSON:
         2. Validation: Run all validators in parallel (signatures, code quality,
            test quality, Pydantic usage, project structure)
         3. Analysis: Single LLM call to interpret results
+        3a. Pattern identification (if pattern_guidelines_path): LLM finds patterns in code
+        3b. Pattern evaluation (if pattern_guidelines_path): LLM checks each against guidelines
         4. Report: Generate structured output
 
         Args:
@@ -959,6 +1155,9 @@ Respond with JSON:
             external_components_path: Optional path to external components
             module_names: Optional list of module directory names to filter by
                          (e.g., ['screening_module']). If None, will extract from spec.
+            pattern_guidelines_path: Optional path to pattern guidelines folder (e.g. python-patterns-master)
+                         containing README.md and linked pattern descriptions. If set, runs pattern
+                         identification and evaluation and adds design_pattern issues to the report.
         """
         self._start_time = datetime.now()
         self._code_root = Path(code_root).resolve()  # Store for path normalization
@@ -1061,6 +1260,52 @@ Respond with JSON:
         except Exception as e:
             logger.error(f"LLM analysis failed: {e}")
             llm_output = self._create_fallback_output(extracted_issues, str(e))
+
+        # Phase 3a/3b: Design pattern identification and evaluation (optional)
+        if not pattern_guidelines_path:
+            if self.verbose:
+                logger.info("Pattern review skipped (no --pattern-guidelines path). Use --pattern-guidelines <path> to enable.")
+        else:
+            self._log("Phase 3a: Pattern Identification (ReAct pattern scout)")
+            pattern_guidelines_text = self._load_pattern_guidelines(pattern_guidelines_path)
+            if pattern_guidelines_text.startswith("Error"):
+                logger.warning(f"Pattern guidelines not loaded: {pattern_guidelines_text[:200]}")
+            else:
+                scout = PatternScoutAgent(
+                    config=self.config, max_steps=50, verbose=self.verbose
+                )
+                identification = scout.run(spec_path=spec_path, code_root=code_root)
+                if self.verbose and identification.patterns:
+                    for p in identification.patterns:
+                        logger.info(
+                            "[pattern scout result] %s @ %s: %s",
+                            p.pattern_name,
+                            p.file_path,
+                            (p.rationale[:200] + "…") if p.rationale and len(p.rationale) > 200 else (p.rationale or ""),
+                        )
+                if identification.patterns:
+                    self._log(f"  Identified {len(identification.patterns)} pattern(s) in code")
+                    self._log("Phase 3b: Pattern Evaluation")
+                    evaluation = self._run_pattern_evaluation(
+                        identification.patterns,
+                        pattern_guidelines_text,
+                    )
+                    if self.verbose:
+                        for ev in evaluation.evaluations:
+                            logger.info(
+                                "[pattern evaluation LLM] %s @ %s: is_correct=%s suggestion=%s",
+                                ev.pattern_name,
+                                ev.file_path,
+                                ev.is_correct,
+                                (ev.suggestion or "")[:200],
+                            )
+                    pattern_issues = self._pattern_evaluations_to_issues(
+                        identification.patterns,
+                        evaluation,
+                    )
+                    if pattern_issues:
+                        llm_output.issues.extend(pattern_issues)
+                        self._log(f"  Added {len(pattern_issues)} pattern guideline issue(s)")
 
         # Phase 4: Report
         self._log("Phase 4: Report Generation")

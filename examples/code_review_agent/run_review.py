@@ -109,6 +109,7 @@ def run_review_example(
     coding_guidelines_path: Path | None = None,
     modules_description_path: Path | None = None,
     external_components_path: Path | None = None,
+    pattern_guidelines_path: Path | None = None,
     use_react: bool = False,
     quiet: bool = False,
 ):
@@ -124,6 +125,8 @@ def run_review_example(
         modules_description_path: Optional path to modules description file.
         external_components_path: Optional path to external components directory (e.g., AppFactory-components).
                                   Used to resolve imports but NOT validated.
+        pattern_guidelines_path: Optional path to pattern guidelines folder (e.g. python-patterns-master with
+                                  README.md and linked pattern descriptions). Structured agent only.
         use_react: If True, use ReAct CodeReviewAgent (slower, more exploratory).
                   Default is False, using StructuredCodeReviewAgent (faster, better quality).
     """
@@ -161,7 +164,7 @@ def run_review_example(
         from openhands.agenthub.langgraph_reviewer_agent.agent import (
             CodeReviewAgent,
         )
-        from openhands.agenthub.langgraph_reviewer_agent import (
+        from openhands.agenthub.langgraph_reviewer_agent.config import (
             ReviewAgentConfig,
         )
     except ImportError as e:
@@ -197,11 +200,8 @@ def run_review_example(
                     print(f"   - {pf.relative_to(code_root)}")
             print()
 
-        # Create configuration - will automatically use GPT_OSS_* env vars
-        config = ReviewAgentConfig(
-            verbose=debug,
-            max_iterations=25,  # For ReAct agent (not used by Structured)
-        )
+        # Create configuration from env (GPT_OSS_*); agents get verbose via constructor
+        config = ReviewAgentConfig.from_env()
 
         if not quiet:
             print()
@@ -240,6 +240,12 @@ def run_review_example(
             if not quiet:
                 print(f"📦 Using external components: {external_components_path}")
 
+        pattern_guidelines = None
+        if pattern_guidelines_path and pattern_guidelines_path.exists() and pattern_guidelines_path.is_dir():
+            pattern_guidelines = str(pattern_guidelines_path)
+            if not quiet:
+                print(f"📐 Using pattern guidelines: {pattern_guidelines_path}")
+
         if not quiet:
             print()
             print("=" * 60)
@@ -257,10 +263,12 @@ def run_review_example(
                 "coding_guidelines": coding_guidelines,
                 "modules_description": modules_description,
             }
-            # Only StructuredCodeReviewAgent supports external_components_path and module_names
+            # Only StructuredCodeReviewAgent supports external_components_path, module_names, pattern_guidelines_path
             if not use_react:
                 if external_components:
                     review_kwargs["external_components_path"] = external_components
+                if pattern_guidelines:
+                    review_kwargs["pattern_guidelines_path"] = pattern_guidelines
                 # module_names=None means auto-extract from spec (handled by agent)
                 review_kwargs["module_names"] = None
 
@@ -375,6 +383,12 @@ def main():
         help="Path to external components directory (default: test_data/AppFactory-components)",
     )
     parser.add_argument(
+        "--pattern-guidelines",
+        type=Path,
+        default=None,
+        help="Path to pattern guidelines folder (e.g. python-patterns-master with README.md and pattern .md links)",
+    )
+    parser.add_argument(
         "--react", "-r",
         action="store_true",
         help="Use ReAct CodeReviewAgent instead of StructuredCodeReviewAgent (slower, more exploratory)",
@@ -404,6 +418,7 @@ def main():
         coding_guidelines_path=args.guidelines,
         modules_description_path=args.modules_description,
         external_components_path=args.external_components,
+        pattern_guidelines_path=args.pattern_guidelines,
         use_react=args.react,
     )
 

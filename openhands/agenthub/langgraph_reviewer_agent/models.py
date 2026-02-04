@@ -26,10 +26,25 @@ class IssueCategory(str, Enum):
     PYDANTIC_ISSUE = "pydantic_issue"
     CODE_QUALITY_ISSUE = "code_quality_issue"  # Bad exception handling, mocks in prod, etc.
     GUIDELINE_VIOLATION = "guideline_violation"  # Violates coding guidelines
+    DESIGN_PATTERN = "design_pattern"  # Pattern usage does not match guideline
     SCOPE_VIOLATION = "scope_violation"  # Module implements out-of-scope functionality
     DATA_STRUCTURE_MISMATCH = "data_structure_mismatch"  # Model doesn't match API definition
     CROSS_FILE_ISSUE = "cross_file_issue"  # Issues spanning multiple files (incorrect class usage, missing imports, etc.)
     GENERAL = "general"
+
+
+class IdentifiedPattern(BaseModel):
+    """A design pattern identified in the code."""
+    pattern_name: str = Field(description="Name of the design pattern (e.g., Singleton, Factory)")
+    file_path: str = Field(description="Path to the file where the pattern is used")
+    line_numbers: list[int] = Field(default_factory=list, description="Relevant line numbers")
+    class_or_function_names: list[str] = Field(default_factory=list, description="Class or function names that implement or use this pattern")
+    rationale: str = Field(description="Brief explanation of why this pattern is used here")
+
+
+class PatternIdentificationOutput(BaseModel):
+    """Output from the pattern identification step (e.g. pattern scout agent)."""
+    patterns: list[IdentifiedPattern] = Field(default_factory=list, description="All design patterns found in the code")
 
 
 class ReviewComment(BaseModel):

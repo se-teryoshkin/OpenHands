@@ -35,7 +35,12 @@ class SignatureExtractor(ast.NodeVisitor):
         else:
             self.functions.append(sig)
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        sig = self._extract_signature(node)
+        if self.current_class:
+            self.classes[self.current_class]["methods"].append(sig)
+        else:
+            self.functions.append(sig)
 
     def visit_AnnAssign(self, node: ast.AnnAssign):
         """Extract class field annotations."""
@@ -89,7 +94,11 @@ class FieldAccessExtractor(ast.NodeVisitor):
         self.generic_visit(node)
         self.current_function = old_func
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        old_func = self.current_function
+        self.current_function = node.name
+        self.generic_visit(node)
+        self.current_function = old_func
 
     def visit_Attribute(self, node: ast.Attribute):
         access = {
@@ -148,7 +157,16 @@ class TestInfoExtractor(ast.NodeVisitor):
             self.generic_visit(node)
             self.current_function = None
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        if node.name.startswith("test_"):
+            self.current_function = node.name
+            self.test_functions.append({
+                "name": node.name,
+                "line": node.lineno,
+                "decorators": [ast.unparse(d) for d in node.decorator_list],
+            })
+            self.generic_visit(node)
+            self.current_function = None
 
     def visit_Call(self, node: ast.Call):
         func_name = ""

@@ -9,7 +9,6 @@ The agent uses a ReAct (Reasoning + Acting) pattern to:
 
 import json
 import logging
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -18,10 +17,11 @@ from typing import Any, Literal, TypedDict
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
-    SystemMessage,
     ToolMessage,
 )
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 from langgraph.prebuilt import create_react_agent
 from langgraph.graph.state import CompiledStateGraph
 
@@ -309,10 +309,11 @@ class CodeReviewAgent:
         if self._llm is None:
             logger.debug(f"Creating LLM: model={self.config.llm_model_name}, "
                         f"base_url={self.config.llm_base_url}")
+            api_key = SecretStr(self.config.llm_api_key) if self.config.llm_api_key else None
             self._llm = ChatOpenAI(
                 model=self.config.llm_model_name,
                 temperature=self.config.temperature,
-                api_key=self.config.llm_api_key,
+                api_key=api_key,
                 base_url=self.config.llm_base_url,
             )
         return self._llm
@@ -458,7 +459,7 @@ class CodeReviewAgent:
         review_result = None
 
         # Set recursion limit based on max_iterations config
-        stream_config = {"recursion_limit": self.config.max_iterations * 3}
+        stream_config: RunnableConfig = {"recursion_limit": self.config.max_iterations * 3}
 
         try:
             for event in self.agent.stream(
@@ -520,7 +521,6 @@ class CodeReviewAgent:
         if not review_result:
             error_count = sum(1 for c in collected_comments if c.get("severity") == "error")
             review_result = {
-                "module_name": module_name,
                 "passed": error_count == 0,
                 "summary": "Review completed",
                 "comments": collected_comments,
@@ -554,7 +554,6 @@ class CodeReviewAgent:
         logger.info(f"  Warnings: {sum(1 for c in comments if c.severity.value == 'warning')}")
 
         return ReviewResult(
-            module_name=review_result.get("module_name", module_name),
             passed=review_result.get("passed", len([c for c in comments if c.severity.value == "error"]) == 0),
             comments=comments,
             summary=review_result.get("summary", ""),
@@ -605,7 +604,7 @@ class CodeReviewAgent:
         request = "\n".join(request_parts)
 
         # Stream the agent execution
-        config = {"recursion_limit": self.config.max_iterations * 3}
+        config: RunnableConfig = {"recursion_limit": self.config.max_iterations * 3}
 
         for event in self.agent.stream(
             {"messages": [HumanMessage(content=request)]},
