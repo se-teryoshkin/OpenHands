@@ -8,6 +8,8 @@ RUN npm ci
 
 COPY frontend ./
 RUN npm run build
+#Нужно для работы runtime: local
+#FROM linuxserver/openvscode-server:1.106.3 AS ovs
 
 FROM python:3.13.7-slim-trixie AS base
 FROM base AS backend-builder
@@ -41,17 +43,28 @@ ENV OPENHANDS_USER_ID=42420
 ENV SANDBOX_LOCAL_RUNTIME_URL=http://host.docker.internal
 ENV USE_HOST_NETWORK=false
 ENV WORKSPACE_BASE=/opt/workspace_base
+# Для работы runtime: local нужно заменить переменные окружения SANDBOX_LOCAL_RUNTIME_URL и WORKSPACE_BASE
+#ENV WORKSPACE_BASE=/workspace
+#ENV SANDBOX_LOCAL_RUNTIME_URL=http://127.0.0.1
 ENV OPENHANDS_BUILD_VERSION=$OPENHANDS_BUILD_VERSION
 ENV SANDBOX_USER_ID=0
 ENV FILE_STORE=local
 ENV FILE_STORE_PATH=/.openhands
 ENV INIT_GIT_IN_EMPTY_WORKSPACE=1
+#Нужно для работы runtime: local, иначе не находит vscode
+#ENV OPENVSCODE_SERVER_ROOT=/openhands/.openvscode-server
 RUN mkdir -p $FILE_STORE_PATH
 RUN mkdir -p $WORKSPACE_BASE
 
 RUN apt-get update -y \
-    && apt-get install -y curl ssh sudo \
+    && apt-get install -y curl ssh sudo\
     && rm -rf /var/lib/apt/lists/*
+
+#Нужно для работы runtime: local (заменить run на строках 59-62 выше)
+#RUN apt-get update -y \
+#    && apt-get install -y curl ssh sudo tmux\
+#    && rm -rf /var/lib/apt/lists/*
+#RUN python3 -m pip install uv
 
 # Default is 1000, but OSX is often 501
 RUN sed -i 's/^UID_MIN.*/UID_MIN 499/' /etc/login.defs
@@ -88,6 +101,11 @@ COPY --chown=openhands:openhands --chmod=770 --from=frontend-builder /app/build 
 COPY --chown=openhands:openhands --chmod=770 ./containers/app/entrypoint.sh /app/entrypoint.sh
 
 USER root
+
+#Нужно для работы runtime: local
+#RUN playwright install --with-deps chromium-headless-shell
+#
+#COPY --from=ovs --chown=openhands:openhands /app/openvscode-server ${OPENVSCODE_SERVER_ROOT}
 
 WORKDIR /app
 
