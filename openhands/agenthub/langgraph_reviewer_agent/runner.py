@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standalone runner for the LangGraph Code Review Agent.
+r"""Standalone runner for the LangGraph Code Review Agent.
 
 This script allows running the code review agent from the command line
 for testing and experimentation purposes.
@@ -14,6 +14,9 @@ Environment Variables:
     GPT_OSS_HOST: Base URL for the LLM API (default: https://api.openai.com/v1)
     GPT_OSS_KEY: API key for the LLM
     GPT_OSS_MODEL_NAME: Model name (default: gpt-4o)
+    LANGFUSE_PUBLIC_KEY: Langfuse public key (optional tracing)
+    LANGFUSE_SECRET_KEY: Langfuse secret key (optional tracing)
+    LANGFUSE_HOST: Langfuse host (default: http://localhost:3000)
 """
 
 import argparse
@@ -90,6 +93,20 @@ def main():
         action="store_true",
         help="Test the tools without running the full agent",
     )
+    parser.add_argument(
+        "--enable-langfuse",
+        action="store_true",
+        help="Enable Langfuse tracing for this run",
+    )
+    parser.add_argument(
+        "--disable-langfuse",
+        action="store_true",
+        help="Disable Langfuse tracing for this run",
+    )
+    parser.add_argument(
+        "--langfuse-session-id",
+        help="Optional Langfuse session ID (groups traces in Langfuse)",
+    )
 
     args = parser.parse_args()
 
@@ -135,6 +152,12 @@ def main():
     if args.strict:
         config.strict_mode = True
     config.verbose = args.verbose
+    if args.enable_langfuse:
+        config.langfuse_enabled = True
+    if args.disable_langfuse:
+        config.langfuse_enabled = False
+    if args.langfuse_session_id:
+        config.langfuse_session_id = args.langfuse_session_id
 
     # Validate config
     try:
@@ -149,6 +172,15 @@ def main():
     if args.verbose:
         print(f"Using model: {config.llm_model_name}", file=sys.stderr)
         print(f"API base URL: {config.llm_base_url}", file=sys.stderr)
+        print(
+            "Langfuse tracing: "
+            + (
+                f"enabled (host={config.langfuse_host}, session={config.langfuse_session_id or 'auto'})"
+                if config.langfuse_enabled
+                else "disabled"
+            ),
+            file=sys.stderr,
+        )
 
     # Run review (StructuredCodeReviewAgent has no streaming; module_names filters by spec)
     if args.stream:

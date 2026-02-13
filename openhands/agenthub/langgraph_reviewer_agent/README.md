@@ -33,6 +33,12 @@ The agent requires `langgraph` and `langchain-openai`. Add to your dependencies:
 pip install langgraph langchain-openai langchain-core
 ```
 
+For optional Langfuse tracing during local testing:
+
+```bash
+poetry add langfuse
+```
+
 Or add to `pyproject.toml`:
 
 ```toml
@@ -50,6 +56,34 @@ export GPT_OSS_HOST="https://api.openai.com/v1"  # or your LLM API endpoint
 export GPT_OSS_KEY="your-api-key"
 export GPT_OSS_MODEL_NAME="gpt-4o"  # or your preferred model
 ```
+
+### Optional: Langfuse tracing configuration
+
+When these variables are set, traces for all LLM calls in the reviewer agent are sent to Langfuse:
+
+```bash
+export LANGFUSE_PUBLIC_KEY="pk-lf-..."
+export LANGFUSE_SECRET_KEY="sk-lf-..."
+export LANGFUSE_HOST="http://localhost:3000"
+
+# Optional overrides
+export REVIEW_AGENT_LANGFUSE_ENABLED="true"              # default auto-enables if keys are present
+export LANGFUSE_TRACE_NAME="langgraph-code-review"       # default trace name
+export LANGFUSE_SESSION_ID="review-local-M4"             # use this to group one run/session
+```
+
+## Run Langfuse locally (Docker Compose)
+
+Use the official local self-host setup:
+
+```bash
+git clone https://github.com/langfuse/langfuse.git
+cd langfuse
+# Edit docker-compose.yml and replace every `CHANGEME` secret
+docker compose up -d
+```
+
+Langfuse UI will be available at `http://localhost:3000` once containers are healthy.
 
 ## Usage
 
@@ -72,6 +106,17 @@ poetry run python examples/code_review_agent/run_review.py \
   --external-components test_data/AppFactory-components \
   --pattern-guidelines /path/to/python-patterns-master \
   --debug
+```
+
+With Langfuse explicitly enabled for this run:
+
+```bash
+poetry run python -m openhands.agenthub.langgraph_reviewer_agent.runner \
+  --spec test_data/module_M4/M4.md \
+  --code test_data/module_M4/M4_lvm_run \
+  --module M4 \
+  --enable-langfuse \
+  --langfuse-session-id review-local-M4
 ```
 
 - **`--spec`** – Specification file (required).

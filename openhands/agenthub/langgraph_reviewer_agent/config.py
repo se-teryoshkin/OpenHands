@@ -42,11 +42,42 @@ class ReviewAgentConfig:
     enable_test_validation: bool = True
     enable_structure_validation: bool = True
 
+    # Langfuse tracing (optional)
+    langfuse_public_key: str = field(
+        default_factory=lambda: os.getenv("LANGFUSE_PUBLIC_KEY", "")
+    )
+    langfuse_secret_key: str = field(
+        default_factory=lambda: os.getenv("LANGFUSE_SECRET_KEY", "")
+    )
+    langfuse_host: str = field(
+        default_factory=lambda: os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+    )
+    langfuse_trace_name: str = field(
+        default_factory=lambda: os.getenv("LANGFUSE_TRACE_NAME", "langgraph-code-review")
+    )
+    langfuse_session_id: str = field(
+        default_factory=lambda: os.getenv("LANGFUSE_SESSION_ID", "")
+    )
+    langfuse_enabled: bool = field(
+        default_factory=lambda: os.getenv("REVIEW_AGENT_LANGFUSE_ENABLED", "").lower() in {"1", "true", "yes"}
+        or (
+            bool(os.getenv("LANGFUSE_PUBLIC_KEY"))
+            and bool(os.getenv("LANGFUSE_SECRET_KEY"))
+        )
+    )
+
     def validate(self) -> None:
         """Validate the configuration."""
         if not self.llm_api_key:
             raise ValueError(
                 "LLM API key not configured. Set GPT_OSS_KEY or OPENAI_API_KEY environment variable."
+            )
+        if self.langfuse_enabled and (
+            not self.langfuse_public_key or not self.langfuse_secret_key
+        ):
+            raise ValueError(
+                "Langfuse tracing is enabled but keys are missing. "
+                "Set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, or disable with REVIEW_AGENT_LANGFUSE_ENABLED=false."
             )
 
     @classmethod

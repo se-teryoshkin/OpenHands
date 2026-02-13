@@ -5,12 +5,14 @@ This agent uses a deterministic workflow with parallel tool execution
 
 import json
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, SecretStr
 
@@ -126,6 +128,8 @@ class StructuredCodeReviewAgent:
         self._code_root: Path | None = None
         self._file_path_mapping: dict[str, str] = {}
         self._files_reviewed: list[str] = []
+        self._langfuse_handler: Any | None = None
+        self._langfuse_session_id: str | None = None
 
     def _log(self, message: str, level: str = "info"):
         """Log a message if verbose mode is enabled."""
@@ -153,16 +157,87 @@ class StructuredCodeReviewAgent:
         self,
         model: type[BaseModel],
         prompt: str,
+        phase: str = "llm_call",
     ) -> BaseModel:
         """Invoke LLM and return validated Pydantic model output."""
         structured_llm = self.llm.with_structured_output(model)
-        response = structured_llm.invoke(prompt)
+        invoke_config = self._build_invoke_config(phase)
+        response = structured_llm.invoke(prompt, config=invoke_config)
 
         if isinstance(response, dict):
             return model.model_validate(response.get("parsed", response))
         if isinstance(response, model):
             return response
         return model.model_validate(response)
+
+    def _initialize_langfuse_handler(
+        self,
+        spec_path: str,
+        code_root: str,
+        module_names: list[str] | None,
+    ) -> None:
+        """Initialize optional Langfuse callback handler for this review run."""
+        if not self.config.langfuse_enabled:
+            self._langfuse_handler = None
+            self._langfuse_session_id = None
+            return
+
+        try:
+            try:
+                from langfuse.langchain import CallbackHandler  # type: ignore
+            except ImportError:
+                from langfuse.callback import CallbackHandler  # type: ignore
+        except ImportError:
+            logger.warning(
+                "Langfuse tracing requested, but package is not installed. "
+                "Install with `poetry add langfuse`."
+            )
+            self._langfuse_handler = None
+            self._langfuse_session_id = None
+            return
+
+        session_id = self.config.langfuse_session_id or (
+            f"review-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+        )
+        user_id = os.getenv("USER") or os.getenv("USERNAME") or "local-reviewer"
+
+        os.environ["LANGFUSE_PUBLIC_KEY"] = self.config.langfuse_public_key
+        os.environ["LANGFUSE_SECRET_KEY"] = self.config.langfuse_secret_key
+        os.environ["LANGFUSE_HOST"] = self.config.langfuse_host
+        os.environ["LANGFUSE_TRACE_NAME"] = self.config.langfuse_trace_name
+        os.environ["LANGFUSE_SESSION_ID"] = session_id
+        os.environ["LANGFUSE_USER_ID"] = user_id
+
+        self._langfuse_handler = CallbackHandler()
+        self._langfuse_session_id = session_id
+        logger.info(
+            "Langfuse tracing enabled: host=%s trace_name=%s session_id=%s spec=%s code_root=%s modules=%s",
+            self.config.langfuse_host,
+            self.config.langfuse_trace_name,
+            session_id,
+            spec_path,
+            code_root,
+            module_names or "auto",
+        )
+
+    def _build_invoke_config(self, phase: str) -> RunnableConfig:
+        """Build invocation config with optional Langfuse callback."""
+        config: RunnableConfig = {"metadata": {"review_phase": phase}}
+        if self._langfuse_handler is not None:
+            config["callbacks"] = [self._langfuse_handler]
+            config["tags"] = ["reviewer-agent", phase]
+        return config
+
+    def _flush_langfuse(self) -> None:
+        """Flush Langfuse events if handler supports it."""
+        if self._langfuse_handler is None:
+            return
+        try:
+            flush_method = getattr(self._langfuse_handler, "flush", None)
+            if callable(flush_method):
+                flush_method()
+        except Exception as e:
+            logger.debug(f"Failed to flush Langfuse callback handler: {e}")
 
     def _extract_module_names_from_spec(self, spec_content: str) -> list[str]:
         """Extract module names from specification using LLM structured output."""
@@ -180,7 +255,11 @@ Specification:
 
 If no modules are clearly identified, return an empty list with "low" confidence."""
         try:
-            module_data = self._invoke_structured_output(ModuleNames, prompt)
+            module_data = self._invoke_structured_output(
+                ModuleNames,
+                prompt,
+                phase="module_extraction",
+            )
         except Exception as e:
             logger.warning(f"Failed to extract module names from spec: {e}")
             return []
@@ -253,7 +332,11 @@ Your task:
 
 If a spec module name clearly matches a directory (even with variations), include it in matched_modules."""
         try:
-            matched_data = self._invoke_structured_output(MatchedModules, prompt)
+            matched_data = self._invoke_structured_output(
+                MatchedModules,
+                prompt,
+                phase="module_matching",
+            )
         except Exception as e:
             logger.warning(f"Failed to match modules with code structure: {e}")
             matched_data = None
@@ -739,7 +822,11 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         """Step 1: LLM identifies all design patterns in the code."""
         prompt = self._build_pattern_identification_prompt(spec_content, file_contents)
         try:
-            out = self._invoke_structured_output(PatternIdentificationOutput, prompt)
+            out = self._invoke_structured_output(
+                PatternIdentificationOutput,
+                prompt,
+                phase="pattern_identification",
+            )
             assert isinstance(out, PatternIdentificationOutput)
             return out
         except Exception as e:
@@ -756,7 +843,11 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
             return PatternEvaluationOutput(evaluations=[])
         prompt = self._build_pattern_evaluation_prompt(identified_patterns, pattern_guidelines)
         try:
-            out = self._invoke_structured_output(PatternEvaluationOutput, prompt)
+            out = self._invoke_structured_output(
+                PatternEvaluationOutput,
+                prompt,
+                phase="pattern_evaluation",
+            )
             assert isinstance(out, PatternEvaluationOutput)
             return out
         except Exception as e:
@@ -1235,6 +1326,7 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         logger.info("Starting structured code review")
         logger.info(f"  Spec: {spec_path}")
         logger.info(f"  Code: {code_root}")
+        self._initialize_langfuse_handler(spec_path, code_root, module_names)
 
         # Phase 0: Extract and match module names from spec
         phase_start = datetime.now()
@@ -1330,7 +1422,11 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         )
 
         try:
-            llm_structured = self._invoke_structured_output(LLMSeverityOutput, prompt)
+            llm_structured = self._invoke_structured_output(
+                LLMSeverityOutput,
+                prompt,
+                phase="issue_severity_assignment",
+            )
             assert isinstance(llm_structured, LLMSeverityOutput)
             llm_output = self._merge_llm_output_with_extracted_issues(
                 llm_structured,
@@ -1351,8 +1447,12 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
                 logger.warning(f"Pattern guidelines not loaded: {pattern_guidelines_text[:200]}")
             else:
                 scout = PatternScoutAgent(
-                    config=self.config, max_steps=50, verbose=self.verbose
+                    config=self.config,
+                    max_steps=50,
+                    verbose=self.verbose,
                 )
+                if self._langfuse_handler is not None:
+                    scout.callbacks = [self._langfuse_handler]
                 identification = scout.run(spec_path=spec_path, code_root=code_root)
                 if self.verbose and identification.patterns:
                     for p in identification.patterns:
@@ -1408,5 +1508,6 @@ Output one evaluation per identified pattern, in the same order. Be strict: only
         logger.info(f"Review completed in {duration:.1f}s")
         logger.info(f"  Errors: {sum(1 for c in result.comments if c.severity == IssueSeverity.ERROR)}")
         logger.info(f"  Warnings: {sum(1 for c in result.comments if c.severity == IssueSeverity.WARNING)}")
+        self._flush_langfuse()
 
         return result

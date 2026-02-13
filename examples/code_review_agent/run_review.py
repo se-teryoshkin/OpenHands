@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Code Review Agent Example
+"""Code Review Agent example.
 
 This example demonstrates how to use the Structured Code Review Agent to review generated code against a specification.
 
@@ -124,6 +123,7 @@ def run_review_example(
                                   Used to resolve imports but NOT validated.
         pattern_guidelines_path: Optional path to pattern guidelines folder (e.g. python-patterns-master with
                                   README.md and linked pattern descriptions).
+        quiet: If True, minimize console output.
     """
     # Check for required environment variables
     api_key = os.getenv("GPT_OSS_KEY")
@@ -196,6 +196,13 @@ def run_review_example(
             print()
             print(f"🤖 Using model: {config.llm_model_name}")
             print(f"🌐 API endpoint: {config.llm_base_url}")
+            if config.langfuse_enabled:
+                print(
+                    f"🛰️  Langfuse tracing: enabled (host={config.langfuse_host}, "
+                    f"session={config.langfuse_session_id or 'auto'})"
+                )
+            else:
+                print("🛰️  Langfuse tracing: disabled")
             print()
 
         agent = StructuredCodeReviewAgent(config, verbose=verbose or debug)

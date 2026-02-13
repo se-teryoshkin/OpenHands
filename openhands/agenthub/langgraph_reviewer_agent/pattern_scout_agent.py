@@ -6,6 +6,7 @@ reports identified patterns via report_patterns_tool with Pydantic-validated out
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -54,10 +55,12 @@ class PatternScoutAgent:
         config: ReviewAgentConfig | None = None,
         max_steps: int = 50,
         verbose: bool = False,
+        callbacks: list[Any] | None = None,
     ):
         self.config = config or ReviewAgentConfig.from_env()
         self.max_steps = max_steps
         self.verbose = verbose
+        self.callbacks = callbacks
         self._llm: ChatOpenAI | None = None
         self._agent = None
         self._result_holder: dict = {}
@@ -134,11 +137,16 @@ Use find_python_files_tool with root_path="{code_root_resolved}", then read the 
         )
 
         logger.info("Pattern scout: starting (ReAct agent)")
+        run_config: dict[str, Any] = {"recursion_limit": self.max_steps * 3}
+        if self.callbacks:
+            run_config["callbacks"] = self.callbacks
+            run_config["metadata"] = {"review_phase": "pattern_scout"}
+            run_config["tags"] = ["reviewer-agent", "pattern-scout"]
         try:
             if self.verbose:
                 for event in self.agent.stream(
                     {"messages": [HumanMessage(content=user_content)]},
-                    config={"recursion_limit": self.max_steps * 3},
+                    config=run_config,
                     stream_mode="values",
                 ):
                     messages = event.get("messages", [])
@@ -161,7 +169,7 @@ Use find_python_files_tool with root_path="{code_root_resolved}", then read the 
             else:
                 self.agent.invoke(
                     {"messages": [HumanMessage(content=user_content)]},
-                    config={"recursion_limit": self.max_steps * 3},
+                    config=run_config,
                 )
         except Exception as e:
             logger.warning(f"Pattern scout agent stopped: {e}")
