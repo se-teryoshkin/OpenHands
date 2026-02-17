@@ -9,6 +9,7 @@ RUN npm ci
 COPY frontend ./
 RUN npm run build
 
+FROM linuxserver/openvscode-server:1.106.3 AS ovs
 FROM python:3.13.7-slim-trixie AS base
 FROM base AS backend-builder
 
@@ -40,18 +41,25 @@ ENV RUN_AS_OPENHANDS=true
 ENV OPENHANDS_USER_ID=42420
 ENV SANDBOX_LOCAL_RUNTIME_URL=http://host.docker.internal
 ENV USE_HOST_NETWORK=false
-ENV WORKSPACE_BASE=/opt/workspace_base
+ENV WORKSPACE_BASE=/workspace
+ENV SANDBOX_LOCAL_RUNTIME_URL=http://127.0.0.1
 ENV OPENHANDS_BUILD_VERSION=$OPENHANDS_BUILD_VERSION
 ENV SANDBOX_USER_ID=0
 ENV FILE_STORE=local
 ENV FILE_STORE_PATH=/.openhands
 ENV INIT_GIT_IN_EMPTY_WORKSPACE=1
+
+ENV OPENVSCODE_SERVER_ROOT=/openhands/.openvscode-server
+COPY --from=ovs --chown=openhands:openhands /app/openvscode-server ${OPENVSCODE_SERVER_ROOT}
+
 RUN mkdir -p $FILE_STORE_PATH
 RUN mkdir -p $WORKSPACE_BASE
 
 RUN apt-get update -y \
-    && apt-get install -y curl ssh sudo \
+    && apt-get install -y curl ssh sudo tmux \
     && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install uv
 
 # Default is 1000, but OSX is often 501
 RUN sed -i 's/^UID_MIN.*/UID_MIN 499/' /etc/login.defs
@@ -72,6 +80,7 @@ ENV VIRTUAL_ENV=/app/.venv \
     PYTHONPATH='/app'
 
 COPY --chown=openhands:openhands --chmod=770 --from=backend-builder ${VIRTUAL_ENV} ${VIRTUAL_ENV}
+RUN playwright install --with-deps chromium-headless-shell
 
 COPY --chown=openhands:openhands --chmod=770 ./microagents ./microagents
 COPY --chown=openhands:openhands --chmod=770 ./openhands ./openhands
