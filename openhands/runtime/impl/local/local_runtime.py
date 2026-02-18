@@ -406,7 +406,7 @@ class LocalRuntime(ActionExecutionClient):
             plugins = _get_plugins(config)
 
             # Copy the logic from Runtime where we add a VSCodePlugin on init if missing
-            if not headless_mode:
+            if not headless_mode and not config.disable_vscode_plugin:
                 plugins.append(VSCodeRequirement())
 
             for _ in range(initial_num_warm_servers):
