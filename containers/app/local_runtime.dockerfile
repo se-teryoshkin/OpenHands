@@ -80,7 +80,6 @@ ENV VIRTUAL_ENV=/app/.venv \
     PYTHONPATH='/app'
 
 COPY --chown=openhands:openhands --chmod=770 --from=backend-builder ${VIRTUAL_ENV} ${VIRTUAL_ENV}
-RUN playwright install --with-deps chromium-headless-shell
 
 COPY --chown=openhands:openhands --chmod=770 ./microagents ./microagents
 COPY --chown=openhands:openhands --chmod=770 ./openhands ./openhands
@@ -97,6 +96,7 @@ COPY --chown=openhands:openhands --chmod=770 --from=frontend-builder /app/build 
 COPY --chown=openhands:openhands --chmod=770 ./containers/app/entrypoint.sh /app/entrypoint.sh
 
 USER root
+RUN playwright install --with-deps chromium-headless-shell
 
 WORKDIR /app
 
