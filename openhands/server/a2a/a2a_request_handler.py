@@ -1,19 +1,37 @@
 import asyncio
-import os
 import base64
+import os
 from collections.abc import AsyncGenerator
 from copy import copy
-from datetime import datetime, timezone, UTC
-from typing import Any, Dict, Optional, Self
+from datetime import UTC, datetime, timezone
+from typing import Any, Optional, Self
 from uuid import uuid4
-from pydantic import BaseModel, Field
+
 from a2a.server.events import Event as A2AEvent
 from a2a.types import (
-    Artifact, MessageSendParams, Role, Task, TaskIdParams, TaskQueryParams, TaskState,
-    TaskStatus, TextPart, FilePart, FileWithBytes, TaskPushNotificationConfig, Message as A2AMessage,
-    TaskNotFoundError, UnsupportedOperationError, InvalidParamsError, InternalError, TaskStatusUpdateEvent,
+    Artifact,
+    FilePart,
+    FileWithBytes,
+    InternalError,
+    InvalidParamsError,
+    MessageSendParams,
+    Role,
+    Task,
+    TaskIdParams,
+    TaskNotFoundError,
+    TaskPushNotificationConfig,
+    TaskQueryParams,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+    TextPart,
+    UnsupportedOperationError,
+)
+from a2a.types import (
+    Message as A2AMessage,
 )
 from a2a.utils.errors import ServerError
+from pydantic import BaseModel, Field
 
 from openhands.core.exceptions import AgentRuntimeUnavailableError
 from openhands.core.logger import openhands_logger as logger
@@ -21,21 +39,34 @@ from openhands.core.schema import ActionType
 from openhands.core.schema.agent import AgentState
 from openhands.events import EventStreamSubscriber
 from openhands.events.action import (
-    NullAction, SystemMessageAction, RecallAction, Action, ChangeAgentStateAction, MessageAction
+    Action,
+    ChangeAgentStateAction,
+    MessageAction,
+    NullAction,
+    RecallAction,
+    SystemMessageAction,
 )
 from openhands.events.event import Event, EventSource
 from openhands.events.event_store import EventStore
 from openhands.events.observation import NullObservation
-from openhands.events.observation.agent import AgentStateChangedObservation, RecallObservation
+from openhands.events.observation.agent import (
+    AgentStateChangedObservation,
+    RecallObservation,
+)
 from openhands.events.serialization import event_to_dict
-from openhands.runtime import Runtime
 from openhands.integrations.provider import ProviderHandler
+from openhands.runtime import Runtime
 from openhands.server.services.conversation_service import create_new_conversation
 from openhands.server.session.agent_session import AgentSession
 from openhands.server.session.conversation_init_data import ConversationInitData
 from openhands.server.shared import (
-    SecretsStoreImpl, SettingsStoreImpl, ConversationStoreImpl,
-    config, server_config,conversation_manager, file_store
+    ConversationStoreImpl,
+    SecretsStoreImpl,
+    SettingsStoreImpl,
+    config,
+    conversation_manager,
+    file_store,
+    server_config,
 )
 from openhands.server.types import AppMode
 from openhands.storage.conversation.conversation_store import ConversationStore
@@ -44,15 +75,28 @@ from openhands.storage.data_models.secrets import Secrets
 from openhands.storage.locations import get_task_filename, get_tasks_folder
 from openhands.utils.async_utils import call_async_from_sync
 
-
 TASK_TERMINAL_STATES = {TaskState.failed, TaskState.canceled, TaskState.completed, TaskState.rejected}
-METADATA_NAME_PREFIX = "openhands"
+METADATA_NAME_PREFIX = 'openhands'
 AUTO_CONTINUE_RESPONSE = (
     'Please continue on whatever approach you think is suitable.\n'
     'If you think you have solved the task, please finish the interaction.\n'
     'IMPORTANT: YOU SHOULD NOT ASK FOR HUMAN RESPONSE UNTIL USER CONTACT YOU HIMSELF.\n'
 )
 A2A_SUBSCRIBE_ID = 'a2a_task_{task_id}'
+
+SYSTEM_EVENT_TYPES = (
+    # System actions/observations that should be hidden from user-visible history/stream
+    NullAction,
+    NullObservation,
+    AgentStateChangedObservation,
+    SystemMessageAction,
+    RecallAction,
+    RecallObservation,
+    ChangeAgentStateAction,
+)
+
+def _is_user_visible_event(event: Event) -> bool:
+    return isinstance(event, Action) and not isinstance(event, SYSTEM_EVENT_TYPES)
 
 
 class TaskSave(BaseModel):
@@ -92,8 +136,8 @@ class A2AOHTaskWrapper:
         self._unsubscribe_event = asyncio.Event()
         self.agent_session: Optional[AgentSession] = None
 
-        auto_continue = metadata.get(f"{METADATA_NAME_PREFIX}/auto-continue", False)
-        metadata[f"{METADATA_NAME_PREFIX}/auto-continue"] = auto_continue
+        auto_continue = metadata.get(f'{METADATA_NAME_PREFIX}/auto-continue', False)
+        metadata[f'{METADATA_NAME_PREFIX}/auto-continue'] = auto_continue
 
         self.auto_continue = auto_continue
         self.metadata = metadata
@@ -103,8 +147,8 @@ class A2AOHTaskWrapper:
         self._stream_queues: set[asyncio.Queue] = set()
 
     def __repr__(self) -> str:
-        return (f"Task(id={self.task_id}, status={self.status}, "
-                f"history_length={len(self.history)}, metadata={self.metadata})")
+        return (f'Task(id={self.task_id}, status={self.status}, '
+                f'history_length={len(self.history)}, metadata={self.metadata})')
 
     def stream(self) -> AsyncGenerator[A2AEvent, None]:
         q: asyncio.Queue = asyncio.Queue()
@@ -119,7 +163,7 @@ class A2AOHTaskWrapper:
                 yield TaskStatusUpdateEvent(
                     task_id=self.task_id,
                     context_id=self.context_id,
-                    kind="status-update",
+                    kind='status-update',
                     status=TaskStatus(
                         state=self.status.state,
                         message=self.status.message,
@@ -138,7 +182,7 @@ class A2AOHTaskWrapper:
                     finally:
                         q.task_done()
 
-                    if isinstance(event, TaskStatusUpdateEvent) and getattr(event, "final", False):
+                    if isinstance(event, TaskStatusUpdateEvent) and getattr(event, 'final', False):
                         return
             finally:
                 self._stream_queues.discard(q)
@@ -209,7 +253,7 @@ class A2AOHTaskWrapper:
             event = TaskStatusUpdateEvent(
                 task_id=self.task_id,
                 context_id=self.context_id,
-                kind="status-update",
+                kind='status-update',
                 status=TaskStatus(
                     state=self.status.state,
                     message=self.status.message,
@@ -231,7 +275,7 @@ class A2AOHTaskWrapper:
 
                 metadata = message.metadata
                 if metadata is not None:
-                    event_id = metadata.get(f"{METADATA_NAME_PREFIX}/event-id", None)
+                    event_id = metadata.get(f'{METADATA_NAME_PREFIX}/event-id', None)
 
                     if event_id in self.events:
                         event = self.events[event_id]
@@ -262,25 +306,16 @@ class A2AOHTaskWrapper:
 
                     metadata = message.metadata
                     if metadata is not None:
-                        event = self.events[metadata.get(f"{METADATA_NAME_PREFIX}/event-id")]
-                        if (isinstance(event, Action)
-                                and not isinstance(event, (
-                                        # System events
-                                        NullAction,
-                                        NullObservation,
-                                        AgentStateChangedObservation,
-                                        SystemMessageAction,
-                                        RecallAction,
-                                        RecallObservation,
-                                        ChangeAgentStateAction,
-                                ))):
+                        event_id = metadata.get(f'{METADATA_NAME_PREFIX}/event-id')
+                        event = self.events.get(event_id)
+                        if event is not None and _is_user_visible_event(event):
                             history.append(message)
                             if history_length is not None and len(history) >= history_length:
                                 break
                 history = history[::-1]
 
         artifacts = None
-        if self.status.state is TaskState.completed and len(self.artifacts) > 0:
+        if self.status.state == TaskState.completed and len(self.artifacts) > 0:
             artifacts = self.artifacts
 
         return Task(
@@ -300,21 +335,21 @@ class A2AOHTaskWrapper:
 
             # TODO: Добавить проверку на уникальность message_id в рамках context_id
             message_id=(
-                getattr(event, "a2a_metadata", dict()).get("message_id", f"{task_id}-{event.id}")
+                getattr(event, 'a2a_metadata', dict()).get('message_id', f'{task_id}-{event.id}')
             ),
 
             context_id=context_id,
 
             # TODO: Add multiple parts
-            parts=[TextPart(text=event.message if event.message is not None else "")],
+            parts=[TextPart(text=event.message if event.message is not None else '')],
 
             task_id=task_id,
             metadata={
-                f"{METADATA_NAME_PREFIX}/event-source": event.source,
-                f"{METADATA_NAME_PREFIX}/event-id": event.id,
-                f"{METADATA_NAME_PREFIX}/agent-state": getattr(event, "agent_state", ""),
-                f"{METADATA_NAME_PREFIX}/event-type": type(event).__name__,
-                f"{METADATA_NAME_PREFIX}/event-timestamp": event.timestamp,
+                f'{METADATA_NAME_PREFIX}/event-source': event.source,
+                f'{METADATA_NAME_PREFIX}/event-id': event.id,
+                f'{METADATA_NAME_PREFIX}/agent-state': getattr(event, 'agent_state', ''),
+                f'{METADATA_NAME_PREFIX}/event-type': type(event).__name__,
+                f'{METADATA_NAME_PREFIX}/event-timestamp': event.timestamp,
             }
         )
 
@@ -332,7 +367,7 @@ class A2AOHTaskWrapper:
 
         self.history.append(message)
 
-        match (agent_state := getattr(event, "agent_state", "")):
+        match (agent_state := getattr(event, 'agent_state', '')):
             case AgentState.FINISHED:
                 self.update_status(TaskState.completed)
             case AgentState.STOPPED:
@@ -420,7 +455,7 @@ class A2AOHTaskWrapper:
         agent_session = conversation_manager.get_agent_session(self.context_id)
 
         if agent_session is None:
-            logger.error(f"No agent_session for {self.context_id} after waiting")
+            logger.error(f'No agent_session for {self.context_id} after waiting')
 
         self.agent_session = agent_session
         return agent_session
@@ -457,7 +492,7 @@ class A2AOHTaskWrapper:
             max_event_id = self.max_event_id,
             metadata=copy(self.metadata),
             artifacts=copy(self.artifacts),
-        ).model_dump_json(exclude_none=True).encode(encoding="utf-8")
+        ).model_dump_json(exclude_none=True).encode(encoding='utf-8')
 
     @classmethod
     def deserialize(cls, data: bytes | str | bytearray, user_id: str | None) -> Self:
@@ -512,8 +547,8 @@ def load_conversation_tasks(context_id: str, user_id: str | None) -> dict[str, A
 
     try:
         files = file_store.list(path)
-    except FileNotFoundError as e:
-        logger.warning(f"No a2a tasks found for conversation {context_id} (path: {path})")
+    except FileNotFoundError:
+        logger.warning(f'No a2a tasks found for conversation {context_id} (path: {path})')
         return dict()
 
     tasks: dict[str, A2AOHTaskWrapper] = dict()
@@ -523,9 +558,9 @@ def load_conversation_tasks(context_id: str, user_id: str | None) -> dict[str, A
             task = A2AOHTaskWrapper.deserialize(content, user_id)
             tasks[task.task_id] = task
         except Exception as e:
-            logger.error(f"Error during task load {filename} for conversation {context_id}. Reason: {e}")
+            logger.error(f'Error during task load {filename} for conversation {context_id}. Reason: {e}')
             continue
-    logger.debug(f"Loaded {len(tasks)} tasks for conversation {context_id}")
+    logger.debug(f'Loaded {len(tasks)} tasks for conversation {context_id}')
     return tasks
 
 
@@ -542,7 +577,7 @@ def load_conversations() -> dict[str, A2AOHTaskWrapper]:
     for context_id in conversations:
         loaded_tasks.update(load_conversation_tasks(context_id, None))
 
-    logger.debug(f"Loaded {len(loaded_tasks)} conversation tasks")
+    logger.debug(f'Loaded {len(loaded_tasks)} conversation tasks')
     logger.debug(loaded_tasks)
     return loaded_tasks
 
@@ -568,7 +603,7 @@ class A2aRequestHandler:
 
         if current_task is not None and current_task.status.state not in TASK_TERMINAL_STATES:
             task.update_status(
-                TaskState.rejected, text="You cannot run multiple tasks simultaneously in the context"
+                TaskState.rejected, text='You cannot run multiple tasks simultaneously in the context'
             )
             return False
 
@@ -588,7 +623,7 @@ class A2aRequestHandler:
         self, params: MessageSendParams, context
     ) -> A2AMessage | Task:
 
-        logger.debug(f"A2AMessageSendParams: {params}")
+        logger.debug(f'A2AMessageSendParams: {params}')
 
         task, context_id = await self.get_task(params)
 
@@ -651,7 +686,7 @@ class A2aRequestHandler:
             task = self._tasks[task_id]
             if task.status.state in TASK_TERMINAL_STATES:
                 raise ServerError(error=InvalidParamsError(
-                    message="The task already is in terminal state, you cannot interact it"
+                    message='The task already is in terminal state, you cannot interact it'
                 ))
 
         return task, context_id
@@ -659,13 +694,13 @@ class A2aRequestHandler:
     async def on_message_send_stream(
         self, params: MessageSendParams, context
     ) -> AsyncGenerator[A2AEvent]:
-        logger.debug(f"A2AMessageSendParams (stream): {params}")
+        logger.debug(f'A2AMessageSendParams (stream): {params}')
 
         task, context_id = await self.get_task(params)
 
         show_all_events = False
         if (metadata := params.metadata) is not None:
-            show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
+            show_all_events = metadata.get(f'{METADATA_NAME_PREFIX}/show-all-events', False)
 
         stream = task.stream()
 
@@ -682,21 +717,16 @@ class A2aRequestHandler:
             )
 
         async for event in stream:
-            if show_all_events or event.kind == "status-update":
+            if show_all_events or event.kind == 'status-update':
                 yield event
                 continue
-            real_event = task.events[event.metadata.get(f"{METADATA_NAME_PREFIX}/event-id")]
-            if (isinstance(real_event, Action)
-                    and not isinstance(real_event, (
-                            # System events
-                            NullAction,
-                            NullObservation,
-                            AgentStateChangedObservation,
-                            SystemMessageAction,
-                            RecallAction,
-                            RecallObservation,
-                            ChangeAgentStateAction,
-                    ))):
+            meta = getattr(event, 'metadata', dict())
+            event_id = meta.get(f'{METADATA_NAME_PREFIX}/event-id')
+            if event_id is None:
+                logger.warning(f'No event found for event_id={event_id}')
+                continue
+            real_event = task.events.get(event_id)
+            if real_event is not None and _is_user_visible_event(real_event):
                 yield event
 
     async def on_set_task_push_notification_config(
@@ -720,7 +750,7 @@ class A2aRequestHandler:
     async def on_get_task(self, params: TaskQueryParams, context) -> Task | None:
         show_all_events = False
         if (metadata := params.metadata) is not None:
-            show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
+            show_all_events = metadata.get(f'{METADATA_NAME_PREFIX}/show-all-events', False)
 
         return self._get_task_by_id(params.id).to_response(
             history_length=params.history_length,
@@ -731,30 +761,30 @@ class A2aRequestHandler:
     async def on_list_task(self):
         raise ServerError(error=UnsupportedOperationError())
 
-    def _convert_a2a_params_to_dict(self, params) -> Dict[str, Any]:
+    def _convert_a2a_params_to_dict(self, params) -> dict[str, Any]:
 
         match params:
             case MessageSendParams():
                 # with stream
                 msg = params.message
                 event_dict = {
-                    "action": ActionType.MESSAGE,
-                    "args": {
-                        "content": msg.parts[0].root.text,
-                        "image_urls": [],
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    'action': ActionType.MESSAGE,
+                    'args': {
+                        'content': msg.parts[0].root.text,
+                        'image_urls': [],
+                        'timestamp': datetime.now(timezone.utc).isoformat(),
                     },
-                    "messageId": msg.message_id,
-                    "source": EventSource.USER,
+                    'messageId': msg.message_id,
+                    'source': EventSource.USER,
                 }
             case _ if isinstance(params, (TaskQueryParams, TaskIdParams)):
                 # with tasks/pushNotificationConfig/get tasks/resubscribe
                 event_dict = {
-                    "action": ActionType.CHANGE_AGENT_STATE,
-                    "args": {
-                        "agent_state": AgentState.STOPPED,
+                    'action': ActionType.CHANGE_AGENT_STATE,
+                    'args': {
+                        'agent_state': AgentState.STOPPED,
                     },
-                    "source": EventSource.USER,
+                    'source': EventSource.USER,
                 }
             case _:
                 raise ServerError(error=UnsupportedOperationError())
@@ -812,7 +842,7 @@ class A2aRequestHandler:
         if repository:
             await ProviderHandler(data.git_provider_tokens).verify_repo_provider(repository, git_provider)
 
-        agent_loop_info = await create_new_conversation(
+        await create_new_conversation(
             user_id=user_id,
             git_provider_tokens=data.git_provider_tokens,
             custom_secrets=data.custom_secrets,
@@ -823,7 +853,7 @@ class A2aRequestHandler:
             replay_json=data.replay_json,
             conversation_trigger=ConversationTrigger.SUGGESTED_TASK,
             conversation_instructions=data.conversation_instructions,
-            conversation_title=f"A2A {context_id}",
+            conversation_title=f'A2A {context_id}',
             git_provider=git_provider,
             conversation_id=context_id,
             mcp_config=data.mcp_config,
@@ -846,7 +876,7 @@ class A2aRequestHandler:
             if task.status.state == TaskState.input_required:
                 task.update_status(TaskState.working)
             await self.dispatch(params, task)
-            logger.debug(f"Finished background task for message {params}")
+            logger.debug(f'Finished background task for message {params}')
         except Exception as e:
             logger.error(error_msg := f'Exception while processing message: {e}')
             task.update_status(TaskState.failed, text=error_msg)
@@ -857,7 +887,7 @@ class A2aRequestHandler:
 
         try:
 
-            a2a_metadata = {"message_id": params.message.message_id}
+            a2a_metadata = {'message_id': params.message.message_id}
 
             if isinstance(params, MessageSendParams):
                 event = MessageAction(content=params.message.parts[0].root.text, image_urls=[])
