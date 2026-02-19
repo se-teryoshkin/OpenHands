@@ -11,7 +11,7 @@ from a2a.server.events import Event as A2AEvent
 from a2a.types import (
     Artifact, MessageSendParams, Role, Task, TaskIdParams, TaskQueryParams, TaskState,
     TaskStatus, TextPart, FilePart, FileWithBytes, TaskPushNotificationConfig, Message as A2AMessage,
-    TaskNotFoundError, UnsupportedOperationError, InvalidParamsError, InternalError,
+    TaskNotFoundError, UnsupportedOperationError, InvalidParamsError, InternalError, TaskStatusUpdateEvent,
 )
 from a2a.utils.errors import ServerError
 
@@ -99,9 +99,72 @@ class A2AOHTaskWrapper:
         self.metadata = metadata
         self.context_id = context_id
 
+        self._stream_loop: asyncio.AbstractEventLoop | None = None
+        self._stream_queues: set[asyncio.Queue] = set()
+
     def __repr__(self) -> str:
         return (f"Task(id={self.task_id}, status={self.status}, "
                 f"history_length={len(self.history)}, metadata={self.metadata})")
+
+    def stream(self) -> AsyncGenerator[A2AEvent, None]:
+        q: asyncio.Queue = asyncio.Queue()
+
+        self._stream_loop = asyncio.get_running_loop()
+        self._stream_queues.add(q)
+
+        async def _gen() -> AsyncGenerator[A2AEvent, None]:
+            try:
+                final = self.status.state in TASK_TERMINAL_STATES
+
+                yield TaskStatusUpdateEvent(
+                    task_id=self.task_id,
+                    context_id=self.context_id,
+                    kind="status-update",
+                    status=TaskStatus(
+                        state=self.status.state,
+                        message=self.status.message,
+                        timestamp=self.status.timestamp,
+                    ),
+                    final=final
+                )
+
+                if final:
+                    return
+
+                while True:
+                    event = await q.get()
+                    try:
+                        yield event
+                    finally:
+                        q.task_done()
+
+                    if isinstance(event, TaskStatusUpdateEvent) and getattr(event, "final", False):
+                        return
+            finally:
+                self._stream_queues.discard(q)
+                if not self._stream_queues:
+                    self._stream_loop = None
+
+        return _gen()
+
+    def _send_event_to_stream(self, event: Any) -> None:
+        if not self._stream_queues:
+            return
+
+        loop = self._stream_loop
+        if loop is None:
+            for q in list(self._stream_queues):
+                try:
+                    q.put_nowait(event)
+                except Exception as e:
+                    logger.error(f'Error while streaming task {self.task_id}: {e}')
+            return
+
+        for q in list(self._stream_queues):
+            try:
+                loop.call_soon_threadsafe(q.put_nowait, event)
+            except Exception as e:
+                logger.error(f'Error while streaming task {self.task_id}: {e}')
 
     def update_status(
             self,
@@ -116,6 +179,9 @@ class A2AOHTaskWrapper:
         #  TaskStatusUpdateEventObject - https://a2a-protocol.org/latest/specification/#722-taskstatusupdateevent-object
 
         if self.status.state in TASK_TERMINAL_STATES:
+            return
+
+        if self.status.state == state:
             return
 
         self.status.state = state
@@ -138,6 +204,21 @@ class A2AOHTaskWrapper:
         if state in TASK_TERMINAL_STATES:
             self.is_finished = True
         save_task(self, None)
+
+        if self._stream_loop is not None and self._stream_queues:
+            event = TaskStatusUpdateEvent(
+                task_id=self.task_id,
+                context_id=self.context_id,
+                kind="status-update",
+                status=TaskStatus(
+                    state=self.status.state,
+                    message=self.status.message,
+                    timestamp=self.status.timestamp,
+                ),
+                final=state in TASK_TERMINAL_STATES
+            )
+
+            self._send_event_to_stream(event)
 
     def to_response(self, history_length: int | None = None, show_all_events: bool | None = None) -> Task:
         if show_all_events is None:
@@ -279,6 +360,9 @@ class A2AOHTaskWrapper:
                 self.update_status(TaskState.failed)
             case _:
                 pass
+
+        if self._stream_loop is not None and self._stream_queues:
+                self._send_event_to_stream(message)
 
         if self.is_finished:
 
@@ -506,6 +590,32 @@ class A2aRequestHandler:
 
         logger.debug(f"A2AMessageSendParams: {params}")
 
+        task, context_id = await self.get_task(params)
+
+        check_status = self.check_if_no_tasks_running_for_context(task=task, context_id=context_id)
+
+        if check_status:
+
+            # Update state after the input-required next message
+            if task.status.state == TaskState.input_required:
+                task.update_status(TaskState.working)
+
+            save_task(task, None)
+
+            asyncio.create_task(
+                self.process_message(params, task)
+            )
+
+        return task.to_response(
+            history_length=(
+                None
+                if params.configuration is None
+                else params.configuration.history_length
+            )
+         )
+
+    #params -> (TaskWrapper, context_id)
+    async def get_task(self, params: MessageSendParams) -> tuple[A2AOHTaskWrapper, str]:
         # TODO: Add support for MessageSendConfiguration
         # TODO: Add reject in case of params.configuration.blocking is True
         task_id = params.message.task_id
@@ -544,11 +654,24 @@ class A2aRequestHandler:
                     message="The task already is in terminal state, you cannot interact it"
                 ))
 
+        return task, context_id
+
+    async def on_message_send_stream(
+        self, params: MessageSendParams, context
+    ) -> AsyncGenerator[A2AEvent]:
+        logger.debug(f"A2AMessageSendParams (stream): {params}")
+
+        task, context_id = await self.get_task(params)
+
+        show_all_events = False
+        if (metadata := params.metadata) is not None:
+            show_all_events = metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False)
+
+        stream = task.stream()
+
         check_status = self.check_if_no_tasks_running_for_context(task=task, context_id=context_id)
 
         if check_status:
-
-            # Update state after the input-required next message
             if task.status.state == TaskState.input_required:
                 task.update_status(TaskState.working)
 
@@ -558,21 +681,23 @@ class A2aRequestHandler:
                 self.process_message(params, task)
             )
 
-        return task.to_response(
-            history_length=(
-                None
-                if params.configuration is None
-                else params.configuration.history_length
-            )
-         )
-
-    async def on_message_send_stream(
-        self, params: MessageSendParams
-    ) -> AsyncGenerator[A2AEvent]:
-        # TODO: Для реализации почти всё готово. Осталось только обернуть в асинхронный
-        #  генератор объект A2AOHTaskWrapper и отправлять события события
-        #  при task.status_update, task.on_event + обернуть task.history.
-        raise ServerError(error=UnsupportedOperationError())
+        async for event in stream:
+            if show_all_events or event.kind == "status-update":
+                yield event
+                continue
+            real_event = task.events[event.metadata.get(f"{METADATA_NAME_PREFIX}/event-id")]
+            if (isinstance(real_event, Action)
+                    and not isinstance(real_event, (
+                            # System events
+                            NullAction,
+                            NullObservation,
+                            AgentStateChangedObservation,
+                            SystemMessageAction,
+                            RecallAction,
+                            RecallObservation,
+                            ChangeAgentStateAction,
+                    ))):
+                yield event
 
     async def on_set_task_push_notification_config(
         self, params: TaskPushNotificationConfig
