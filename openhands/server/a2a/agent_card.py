@@ -28,7 +28,7 @@ agent_card = AgentCard(
     version='1.0.0',
     defaultInputModes=['text/plain'],
     defaultOutputModes=['text/plain'],
-    capabilities=AgentCapabilities(streaming=False),
+    capabilities=AgentCapabilities(streaming=True),
     skills=[skill],
     supportsAuthenticatedExtendedCard=False,
 )
