@@ -1,0 +1,278 @@
+task_n,instance_id,instruction,instruct_prompt,canonical_solution,code_prompt,test,entry_point,doc_struct,libs
+26,BigCodeBench_26,"import base64
+from cryptography.fernet import Fernet
+
+def task_func(message, encryption_key):
+    """"""
+    Encrypts a message with a symmetric encryption key using Fernet encryption, and then encode the 
+    encrypted message using base64.
+
+    Parameters:
+    message (str): The message to be encrypted and encoded.
+    encryption_key (str): The key used for symmetric encryption. It should be a string, which should 
+                          be encoded to bytes, then URL-safe base64 encoded to conform to the requirements 
+                          for Fernet (32 bytes after encoding).
+
+    Returns:
+    str: The base64 encoded encrypted message. The message is first encrypted using Fernet encryption, 
+         then the result is base64 encoded.
+
+    Requirements:
+    - base64
+    - cryptography.fernet
+
+    Example:
+    >>> encrypted_message = task_func('Hello, World!', '01234567890123456789012345678901')
+    >>> isinstance(encrypted_message, str)
+    True
+    """"""
+","Encrypts a message with a symmetric encryption key using Fernet encryption, and then encode the encrypted message using base64.
+The function should output with:
+    str: The base64 encoded encrypted message. The message is first encrypted using Fernet encryption,
+    then the result is base64 encoded.
+You should write self-contained code starting with:
+```
+import base64
+from cryptography.fernet import Fernet
+def task_func(message, encryption_key):
+```","    fernet = Fernet(base64.urlsafe_b64encode(encryption_key.encode()))
+    encrypted_message = fernet.encrypt(message.encode())
+    return base64.b64encode(encrypted_message).decode()","import base64
+from cryptography.fernet import Fernet
+def task_func(message, encryption_key):
+","import unittest
+import base64
+from cryptography.fernet import Fernet
+from run import *
+class TestCases(unittest.TestCase):
+    def test_case_1(self):
+        # Test with a basic message and a valid encryption key.
+        result = task_func('Hello, World!', '01234567890123456789012345678901')
+        self.assertIsInstance(result, str)
+        self.assertNotEqual(result, 'Hello, World!')
+    def test_case_2(self):
+        # Test with an empty message and a valid encryption key.
+        result = task_func('', '01234567890123456789012345678901')
+        self.assertIsInstance(result, str)
+        self.assertNotEqual(result, '')
+    def test_case_3(self):
+        # Test with a numeric message and a valid encryption key.
+        result = task_func('1234567890', '01234567890123456789012345678901')
+        self.assertIsInstance(result, str)
+        self.assertNotEqual(result, '1234567890')
+    def test_case_4(self):
+        # Test with a long message and a valid encryption key.
+        long_message = 'A' * 500
+        result = task_func(long_message, '01234567890123456789012345678901')
+        self.assertIsInstance(result, str)
+        self.assertNotEqual(result, long_message)
+    def test_case_5(self):
+        # Test with a basic message and an incorrectly formatted encryption key.
+        with self.assertRaises(ValueError):
+            task_func('Hello, World!', '0123456789')
+    def test_case_6(self):
+        # Test with a non-base64 but correct length key.
+        with self.assertRaises(Exception):
+            task_func('Hello, World!', '01234567890123456789012345678901'*2)  # Not base64-encoded",task_func,"{""description"": [""Encrypts a message with a symmetric encryption key using Fernet encryption, and then encode the"", ""encrypted message using base64.""], ""notes"": [], ""params"": [""message (str): The message to be encrypted and encoded."", ""encryption_key (str): The key used for symmetric encryption. It should be a string, which will"", ""be encoded to bytes, then URL-safe base64 encoded to conform to the requirements"", ""for Fernet (32 bytes after encoding).""], ""returns"": [""str: The base64 encoded encrypted message. The message is first encrypted using Fernet encryption,"", ""then the result is base64 encoded.""], ""reqs"": [""base64"", ""cryptography.fernet""], ""raises"": [], ""examples"": ["">>> encrypted_message = task_func('Hello, World!', '01234567890123456789012345678901')"", "">>> isinstance(encrypted_message, str)"", ""True""]}","['base64', 'cryptography']"
+127,BigCodeBench_127,"import os
+import shutil
+import glob
+import hashlib
+
+def task_func(ROOT_DIR, DEST_DIR, SPECIFIC_HASH):
+    """"""
+    Moves all files from a specified root directory (ROOT_DIR) to a target directory (DEST_DIR) if they match a specific hash value (SPECIFIC_HASH).
+    The function calculates the MD5 hash of each file in ROOT_DIR and moves it if the hash matches SPECIFIC_HASH.
+
+    Parameters:
+        ROOT_DIR (str): The path to the root directory from which files will be moved.
+        DEST_DIR (str): The path to the destination directory where files will be moved to.
+        SPECIFIC_HASH (str): The specific MD5 hash value files must match to be moved.
+
+    Returns:
+        int: The number of files moved to the target directory.
+
+    Note:
+        The function assumes the existence of the root directory. The existence of DEST_DIR is ensured by the function.
+
+    Requirements:
+    - os
+    - shutil
+    - glob
+    - hashlib
+
+    Examples:
+    >>> # Assuming the correct paths are given for ROOT_DIR, DEST_DIR,
+    >>> # and at least one file in ROOT_DIR matches SPECIFIC_HASH:
+    >>> type(task_func('/path/to/root', '/path/to/dest', 'd41d8cd98f00b204e9800998ecf8427e')) is int
+    True
+    >>> task_func('/path/to/root', '/path/to/dest', 'd41d8cd98f00b204e9800998ecf8427e') >= 0
+    True
+    """"""
+","Moves all files from a specified root directory (ROOT_DIR) to a target directory (DEST_DIR) if they match a specific hash value (SPECIFIC_HASH). The function calculates the MD5 hash of each file in ROOT_DIR and moves it if the hash matches SPECIFIC_HASH.
+Note that: The function assumes the existence of the root directory. The existence of DEST_DIR is ensured by the function.
+The function should output with:
+    int: The number of files moved to the target directory.
+You should write self-contained code starting with:
+```
+import os
+import shutil
+import glob
+import hashlib
+def task_func(ROOT_DIR, DEST_DIR, SPECIFIC_HASH):
+```","    files_moved = 0
+
+    os.makedirs(DEST_DIR, exist_ok=True)
+    for filename in glob.glob(os.path.join(ROOT_DIR, '*')):
+        if not os.path.exists(filename) or os.path.isdir(filename):
+            continue
+        with open(filename, 'rb') as f:
+            file_hash = hashlib.md5(f.read()).hexdigest()
+        if file_hash == SPECIFIC_HASH:
+            shutil.move(filename, DEST_DIR)
+            files_moved += 1
+    return files_moved","import os
+import shutil
+import glob
+import hashlib
+def task_func(ROOT_DIR, DEST_DIR, SPECIFIC_HASH):
+","import unittest
+import tempfile
+import shutil
+import os
+import hashlib
+from pathlib import Path
+from unittest.mock import patch
+from run import *
+class TestCases(unittest.TestCase):
+    def setUp(self):
+        # Create a temporary directory for ROOT_DIR and DEST_DIR
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root_dir = Path(self.temp_dir.name, 'root')
+        self.dest_dir = Path(self.temp_dir.name, 'dest')
+        self.root_dir.mkdir()
+        self.dest_dir.mkdir()
+        
+        # Create a dummy file in ROOT_DIR
+        file_content = ""This is a dummy file.""
+        self.dummy_file_path = self.root_dir / 'dummy_file.txt'
+        with open(self.dummy_file_path, 'w') as f:
+            f.write(file_content)
+        # Calculate the hash value for the dummy file
+        self.dummy_file_hash = hashlib.md5(file_content.encode('utf-8')).hexdigest()
+    def tearDown(self):
+        # Cleanup the temporary directory
+        self.temp_dir.cleanup()
+    @patch('shutil.move')
+    def test_file_moved_with_matching_hash(self, mock_move):
+        """"""Test that a file is moved when its hash matches the specified hash.""""""
+        result = task_func(str(self.root_dir), str(self.dest_dir), self.dummy_file_hash)
+        
+        self.assertEqual(result, 1)
+        mock_move.assert_called_once()
+    def test_no_file_moved_with_non_matching_hash(self):
+        """"""Test no files are moved if hash doesn't match.""""""
+        result = task_func(str(self.root_dir), str(self.dest_dir), 'non_matching_hash')
+        
+        self.assertEqual(result, 0)
+        # Since we're not mocking shutil.move, we verify by checking the files in DEST_DIR
+        self.assertEqual(len(list(self.dest_dir.iterdir())), 0)
+    def test_dest_dir_created(self):
+        """"""Test that destination directory is created if it doesn't exist.""""""
+        shutil.rmtree(self.dest_dir)  # Remove the dest_dir to test its recreation
+        task_func(str(self.root_dir), str(self.dest_dir), 'any_hash')
+        
+        self.assertTrue(self.dest_dir.exists())
+    def test_no_files_to_move(self):
+        """"""Test the function when there are no files to move.""""""
+        os.remove(self.dummy_file_path)  # Remove the dummy file to simulate no files to move
+        result = task_func(str(self.root_dir), str(self.dest_dir), 'any_hash')
+        self.assertEqual(result, 0)",task_func,"{""description"": [""Moves all files from a specified root directory (ROOT_DIR) to a target directory (DEST_DIR) if they match a specific hash value (SPECIFIC_HASH)."", ""The function calculates the MD5 hash of each file in ROOT_DIR and moves it if the hash matches SPECIFIC_HASH.""], ""notes"": [""The function assumes the existence of the root directory. The existence of DEST_DIR is ensured by the function.""], ""params"": [""ROOT_DIR (str): The path to the root directory from which files will be moved."", ""DEST_DIR (str): The path to the destination directory where files will be moved to."", ""SPECIFIC_HASH (str): The specific MD5 hash value files must match to be moved.""], ""returns"": [""int: The number of files moved to the target directory.""], ""reqs"": [""os"", ""shutil"", ""glob"", ""hashlib""], ""raises"": [], ""examples"": [""Examples:"", "">>> # Assuming the correct paths are given for ROOT_DIR, DEST_DIR,"", "">>> # and at least one file in ROOT_DIR matches SPECIFIC_HASH:"", "">>> type(task_func('/path/to/root', '/path/to/dest', 'd41d8cd98f00b204e9800998ecf8427e')) is int"", ""True"", "">>> task_func('/path/to/root', '/path/to/dest', 'd41d8cd98f00b204e9800998ecf8427e') >= 0"", ""True""]}","['glob', 'shutil', 'hashlib', 'os']"
+314,BigCodeBench_314,"import socket
+import ssl
+import http.client
+
+def task_func(SERVER_NAME, SERVER_PORT, path):
+    """"""
+    Makes an HTTPS GET request to a specified server and path, and retrieves the response.
+
+    Parameters:
+        SERVER_NAME (str): The name of the server to which the request is made.
+        SERVER_PORT (int): The port number of the server to which the request is made.
+        path (str): The path for the HTTP request.
+
+    Returns:
+        str: The response body from the server as a string.
+
+    Raises:
+        ssl.SSLError: If there is an SSL handshake error.
+
+    Requirements:
+    - socket
+    - ssl
+    - http.client
+
+    Examples:
+    >>> response = task_func('www.example.com', 443, '/path/to/request')
+    >>> isinstance(response, str)
+    True
+    """"""
+","Makes an HTTPS GET request to a specified server and path, and retrieves the response.
+The function should raise the exception for: ssl.SSLError: If there is an SSL handshake error.
+The function should output with:
+    str: The response body from the server as a string.
+You should write self-contained code starting with:
+```
+import socket
+import ssl
+import http.client
+def task_func(SERVER_NAME, SERVER_PORT, path):
+```","    context = ssl.create_default_context()
+
+    with socket.create_connection((SERVER_NAME, SERVER_PORT)) as sock:
+        with context.wrap_socket(sock, server_hostname=SERVER_NAME) as ssock:
+            conn = http.client.HTTPSConnection(SERVER_NAME, SERVER_PORT, context=context)
+            conn.request('GET', path)
+            response = conn.getresponse()
+            return response.read().decode()","import socket
+import ssl
+import http.client
+def task_func(SERVER_NAME, SERVER_PORT, path):
+","import unittest
+from unittest.mock import patch
+import http.client
+import ssl
+import socket
+from run import *
+class TestCases(unittest.TestCase):
+    @patch('http.client.HTTPSConnection')
+    def test_return_type(self, mock_conn):
+        """""" Test that the function returns a string. """"""
+        mock_conn.return_value.getresponse.return_value.read.return_value = b'Server Response'
+        result = task_func('www.example.com', 443, '/test/path')
+        self.assertIsInstance(result, str)
+    @patch('http.client.HTTPSConnection')
+    def test_different_paths(self, mock_conn):
+        """""" Test the function with different request paths. """"""
+        mock_conn.return_value.getresponse.return_value.read.return_value = b'Server Response'
+        result = task_func('www.example.com', 443, '/another/path')
+        self.assertIsInstance(result, str)
+    @patch('http.client.HTTPSConnection')
+    def test_connection_error_handling(self, mock_conn):
+        """""" Test handling of connection errors. """"""
+        mock_conn.side_effect = http.client.HTTPException('Connection error')
+        with self.assertRaises(http.client.HTTPException):
+            task_func('www.example.com', 443, '/error/path')
+    @patch('http.client.HTTPSConnection')
+    def test_response_content(self, mock_conn):
+        """""" Test the content of the response. """"""
+        mock_conn.return_value.getresponse.return_value.read.return_value = b'Expected Content'
+        result = task_func('www.example.com', 443, '/content/path')
+        self.assertEqual(result, 'Expected Content')
+    @patch('socket.create_connection')
+    @patch('http.client.HTTPSConnection')
+    def test_ssl_handshake_error_handling(self, mock_conn, mock_socket):
+        """""" Test handling of SSL handshake errors. """"""
+        mock_socket.side_effect = ssl.SSLError('SSL handshake failed')
+        with self.assertRaises(ssl.SSLError):
+            task_func('badssl.com', 443, '/test/path')",task_func,"{""description"": [""Makes an HTTPS GET request to a specified server and path, and retrieves the response.""], ""notes"": [], ""params"": [""SERVER_NAME (str): The name of the server to which the request is made."", ""SERVER_PORT (int): The port number of the server to which the request is made."", ""path (str): The path for the HTTP request.""], ""returns"": [""str: The response body from the server as a string.""], ""reqs"": [""socket"", ""ssl"", ""http.client""], ""raises"": [""ssl.SSLError: If there is an SSL handshake error.""], ""examples"": [""Examples:"", "">>> response = task_func('www.example.com', 443, '/path/to/request')"", "">>> isinstance(response, str)"", ""True""]}","['http', 'socket', 'ssl']"
