@@ -23,6 +23,7 @@ TOP_KEYS = [
     'observation',
     'tool_call_metadata',
     'llm_metrics',
+    'a2a_metadata',
 ]
 UNDERSCORE_KEYS = [
     'id',
@@ -51,12 +52,14 @@ DELETE_FROM_TRAJECTORY_EXTRAS_AND_SCREENSHOTS = DELETE_FROM_TRAJECTORY_EXTRAS | 
 
 def event_from_dict(data: dict[str, Any]) -> 'Event':
     evt: Event
+
     if 'action' in data:
         evt = action_from_dict(data)
     elif 'observation' in data:
         evt = observation_from_dict(data)
     else:
         raise ValueError(f'Unknown event type: {data}')
+
     for key in UNDERSCORE_KEYS:
         if key in data:
             value = data[key]
@@ -88,6 +91,10 @@ def event_from_dict(data: dict[str, Any]) -> 'Event':
                         )
                 value = metrics
             setattr(evt, '_' + key, value)
+
+    if "a2a_metadata" in data:
+        evt.a2a_metadata = data['a2a_metadata']
+
     return evt
 
 
@@ -100,11 +107,13 @@ def _convert_pydantic_to_dict(obj: BaseModel | dict) -> dict:
 def event_to_dict(event: 'Event') -> dict:
     props = asdict(event)
     d = {}
+
     for key in TOP_KEYS:
         if hasattr(event, key) and getattr(event, key) is not None:
             d[key] = getattr(event, key)
         elif hasattr(event, f'_{key}') and getattr(event, f'_{key}') is not None:
             d[key] = getattr(event, f'_{key}')
+
         if key == 'id' and d.get('id') == -1:
             d.pop('id', None)
         if key == 'timestamp' and 'timestamp' in d:
@@ -149,6 +158,8 @@ def event_to_dict(event: 'Event') -> dict:
             d['success'] = event.success
     else:
         raise ValueError(f'Event must be either action or observation. has: {event}')
+
+    d["event_type"] = type(event).__name__
     return d
 
 

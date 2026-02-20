@@ -74,7 +74,7 @@ poetry = "^2.2.0"
 anyio = "4.9.0"
 pythonnet = "*"
 fastmcp = "^2.12.4"           # Note: 2.12.0+ has breaking auth API changes
-a2a-sdk = "^0.2.4"
+a2a-sdk = "^0.3.10"
 python-frontmatter = "^1.1.0"
 shellingham = "^1.5.4"
 # TODO: Should these go into the runtime group?
@@ -121,6 +121,9 @@ python-jose = { version = ">=3.3", extras = [ "cryptography" ] }
 sqlalchemy = { extras = [ "asyncio" ], version = "^2.0.40" }
 pg8000 = "^1.31.5"
 asyncpg = "^0.30.0"
+langchain-openai = ">=0.1.0,<1.0.0"
+langgraph = ">=0.2.0,<1.0.0"
+langchain = ">=0.2.0,<1.0.0"
 
 [tool.poetry.extras]
 third_party_runtimes = [ "e2b-code-interpreter", "modal", "runloop-api-client", "daytona" ]

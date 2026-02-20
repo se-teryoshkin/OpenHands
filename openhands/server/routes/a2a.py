@@ -10,8 +10,12 @@ jsonrpc_app = A2AFastAPIApplication(
     http_handler=request_handler,
 )
 
+# RFC8615: Well-known URIs are rooted in the top of the path's hierarchy; they
+#          are not well-known by definition in other parts of the path.
+#          For example, "/.well-known/example" is a well-known URI,
+#          whereas "/foo/.well-known/example" is not.
 fastapi_app = jsonrpc_app.build(
-    agent_card_url = '/a2a/.well-known/agent-card.json',
+    agent_card_url = '/.well-known/agent-card.json',
     rpc_url = '/a2a',
 )
 
