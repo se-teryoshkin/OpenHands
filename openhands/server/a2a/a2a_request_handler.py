@@ -601,11 +601,18 @@ class A2aRequestHandler:
     def check_if_no_tasks_running_for_context(self, task: A2AOHTaskWrapper, context_id: str) -> bool:
         current_task = self._current_session_tasks.get(context_id, None)
 
-        if current_task is not None and current_task.status.state not in TASK_TERMINAL_STATES:
-            task.update_status(
-                TaskState.rejected, text='You cannot run multiple tasks simultaneously in the context'
-            )
-            return False
+        if current_task is not None:
+            if (
+                    current_task.task_id == task.task_id
+                    and current_task.status.state == TaskState.input_required
+            ):
+                return True
+
+            if current_task.status.state not in TASK_TERMINAL_STATES:
+                task.update_status(
+                    TaskState.rejected, text='You cannot run multiple tasks simultaneously in the context'
+                )
+                return False
 
         self._current_session_tasks[context_id] = task
         return True
