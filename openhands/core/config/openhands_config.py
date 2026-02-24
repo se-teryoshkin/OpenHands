@@ -69,6 +69,7 @@ class OpenHandsConfig(BaseModel):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     extended: ExtendedConfig = Field(default_factory=lambda: ExtendedConfig({}))
     runtime: str = Field(default='docker')
+    disable_vscode_plugin: bool = Field(default=False)
     file_store: str = Field(default='local')
     file_store_path: str = Field(default='~/.openhands')
     file_store_web_hook_url: str | None = Field(default=None)

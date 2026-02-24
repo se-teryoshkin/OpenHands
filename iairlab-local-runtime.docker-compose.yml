@@ -14,6 +14,7 @@ services:
 
       # Устанавливаем local для запуска рантаймов
       RUNTIME: "local"
+      DISABLE_VSCODE_PLUGIN: "true"
 
       # Для запуска с полноценной работой компонентов. Требуется развёрнутая инфраструктура.
       SANDBOX_RUNTIME_STARTUP_ENV_VARS: "\
@@ -51,7 +52,7 @@ services:
       #  5. Также должна быть выполнена установка компонентов appfactory_components
 
       # Необходимо для корректной работы local runtime
-      SANDBOX_VOLUMES: "/data/hdd/wspace/OpenHands/local-runtime/workspace:/workspace:z"
+      SANDBOX_VOLUMES: "/workspace:/workspace:z"
 
       DOCKER_HOST_ADDR: "10.32.15.14"
 

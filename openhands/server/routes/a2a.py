@@ -15,8 +15,8 @@ jsonrpc_app = A2AFastAPIApplication(
 #          For example, "/.well-known/example" is a well-known URI,
 #          whereas "/foo/.well-known/example" is not.
 fastapi_app = jsonrpc_app.build(
-    agent_card_url = '/.well-known/agent-card.json',
-    rpc_url = '/a2a',
+    agent_card_url='/.well-known/agent-card.json',
+    rpc_url='/a2a',
 )
 
 app = fastapi_app.router
