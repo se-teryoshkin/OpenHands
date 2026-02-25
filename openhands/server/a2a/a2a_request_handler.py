@@ -145,6 +145,7 @@ class A2AOHTaskWrapper:
 
         self._stream_loop: asyncio.AbstractEventLoop | None = None
         self._stream_queues: set[asyncio.Queue] = set()
+        self.last_streamed_event_id = -1
 
     def __repr__(self) -> str:
         return (f'Task(id={self.task_id}, status={self.status}, '
@@ -179,6 +180,12 @@ class A2AOHTaskWrapper:
                     event = await q.get()
                     try:
                         yield event
+                        if event.kind == 'message':
+                            metadata = event.metadata
+                            if metadata is not None:
+                                event_id = metadata.get(f'{METADATA_NAME_PREFIX}/event-id')
+                                if event_id is not None and event_id != Event.INVALID_ID:
+                                    self.last_streamed_event_id = event_id
                     finally:
                         q.task_done()
 
@@ -191,7 +198,7 @@ class A2AOHTaskWrapper:
 
         return _gen()
 
-    def _send_event_to_stream(self, event: Any) -> None:
+    def _send_event_to_stream(self, event: A2AEvent) -> None:
         if not self._stream_queues:
             return
 
@@ -747,9 +754,39 @@ class A2aRequestHandler:
         raise ServerError(error=UnsupportedOperationError())
 
     async def on_resubscribe_to_task(
-        self, params: TaskIdParams
+        self, params: TaskIdParams, context
     ) -> AsyncGenerator[A2AEvent]:
-        raise ServerError(error=UnsupportedOperationError())
+
+        task = self._get_task_by_id(params.id)
+
+        metadata = getattr(params, "metadata", None) or {}
+        show_all_events = bool(metadata.get(f"{METADATA_NAME_PREFIX}/show-all-events", False))
+
+        stream = task.stream()
+        history = task.history
+        for message in history:
+            metadata = message.metadata
+            if metadata is not None:
+                event_id = metadata.get(f'{METADATA_NAME_PREFIX}/event-id')
+                if event_id is None or event_id <= task.last_streamed_event_id:
+                    continue
+                event = task.events.get(event_id)
+                if (event is not None and
+                        (show_all_events or _is_user_visible_event(event))):
+                    yield message
+
+        async for event in stream:
+            if show_all_events or event.kind == 'status-update':
+                yield event
+                continue
+            meta = getattr(event, 'metadata', dict())
+            event_id = meta.get(f'{METADATA_NAME_PREFIX}/event-id')
+            if event_id is None:
+                logger.warning(f'No event found for event_id={event_id}')
+                continue
+            real_event = task.events.get(event_id)
+            if real_event is not None and _is_user_visible_event(real_event):
+                yield event
 
     def should_add_push_info(self, params: MessageSendParams) -> bool:
         raise ServerError(error=UnsupportedOperationError())
