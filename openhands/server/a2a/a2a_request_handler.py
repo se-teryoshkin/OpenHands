@@ -731,16 +731,8 @@ class A2aRequestHandler:
             )
 
         async for event in stream:
-            if show_all_events or event.kind == 'status-update':
-                yield event
-                continue
-            meta = getattr(event, 'metadata', dict())
-            event_id = meta.get(f'{METADATA_NAME_PREFIX}/event-id')
-            if event_id is None:
-                logger.warning(f'No event found for event_id={event_id}')
-                continue
-            real_event = task.events.get(event_id)
-            if real_event is not None and _is_user_visible_event(real_event):
+            event  = _filter_event(task, event, show_all_events)
+            if event is not None:
                 yield event
 
     async def on_set_task_push_notification_config(
@@ -776,16 +768,8 @@ class A2aRequestHandler:
                     yield message
 
         async for event in stream:
-            if show_all_events or event.kind == 'status-update':
-                yield event
-                continue
-            meta = getattr(event, 'metadata', dict())
-            event_id = meta.get(f'{METADATA_NAME_PREFIX}/event-id')
-            if event_id is None:
-                logger.warning(f'No event found for event_id={event_id}')
-                continue
-            real_event = task.events.get(event_id)
-            if real_event is not None and _is_user_visible_event(real_event):
+            event  = _filter_event(task, event, show_all_events)
+            if event is not None:
                 yield event
 
     def should_add_push_info(self, params: MessageSendParams) -> bool:
@@ -963,3 +947,19 @@ def save_task(task: A2AOHTaskWrapper, user_id: str | None):
             },
         )
     file_store.write(filename, task_json_bytes)
+
+
+def _filter_event(task: A2AOHTaskWrapper,
+                  event: A2AEvent | None,
+                  show_all_events: bool = False) -> A2AEvent | None:
+        if show_all_events or event.kind == 'status-update':
+            return event
+        meta = getattr(event, 'metadata', dict())
+        event_id = meta.get(f'{METADATA_NAME_PREFIX}/event-id')
+        if event_id is None:
+            logger.warning(f'No event found for event_id={event_id}')
+            return None
+        real_event = task.events.get(event_id)
+        if real_event is not None and _is_user_visible_event(real_event):
+            return event
+        return None
