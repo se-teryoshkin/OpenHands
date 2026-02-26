@@ -1,8 +1,12 @@
 import asyncio
 import argparse
 from io import BytesIO
+import io
 import os
-from typing import Any
+import tarfile
+import tempfile
+from typing import Any, Callable
+import tqdm
 import zipfile
 
 import pandas as pd
@@ -21,12 +25,22 @@ class InferenceRunner:
         self.data = None
         self.agent = None
         self.events = []
+        self.pre_functions = []
+        self.post_functions = []
 
-    def pre_run_functions(self) -> None:
-        pass
+    def add_pre_function(self, function: Callable, kwargs: dict):
+        self.pre_functions.append((function, kwargs))
 
-    def post_run_functions(self) -> None:
-        pass
+    def add_post_function(self, function: Callable, kwargs: dict):
+        self.post_functions.append((function, kwargs))
+
+    def run_pre_functions(self) -> None:
+        for f in self.pre_functions:
+            f[0](**f[1])
+
+    def run_post_functions(self) -> None:
+        for f in self.post_functions:
+            f[0](**f[1])
 
     def _callback(self, event_message: Any) -> None:
         self.events.append(event_message)
@@ -61,6 +75,29 @@ class InferenceRunner:
             )
         return response.content
 
+    def copy_to_container(
+        self, container, dest_path, src_path=None, data=None, mode=0o644
+    ):
+        tar_stream = io.BytesIO()
+
+        temp_file = None
+        if data is not None:
+            temp_file = tempfile.NamedTemporaryFile(delete=False)
+            if isinstance(data, str):
+                temp_file.write(data.encode('utf-8'))
+            elif isinstance(data, bytes):
+                temp_file.write(data)
+            temp_file.flush()
+            temp_file.close()
+            src_path = temp_file.name
+
+        with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+            arcname = dest_path.lstrip('/')
+            tar.add(src_path, arcname=arcname, recursive=False)
+
+        tar_stream.seek(0)
+        container.put_archive('/', tar_stream)
+
     async def process_task(self, entry: pd.Series) -> None:
         result: RemoteA2AAgentResponse = await self.agent.send_message(
             message_text=(
@@ -74,26 +111,41 @@ class InferenceRunner:
 
         context_id = result.response.get("task", {}).get("contextId", None)
         if not context_id:
-            print(f"Предупреждение: для задачи {entry.instance_id} не получен context_id")
+            print(
+                f"Предупреждение: для задачи {entry.instance_id} не получен context_id"
+            )
             return
 
         client = docker.from_env()
         container = client.containers.get("openhands-runtime-" + context_id)
 
-        test_str = entry.test.replace('"', "'")
+        self.copy_to_container(
+            container=container,
+            dest_path="/workspace/testUnittest.py",
+            data=entry.test,
+        )
+
+        self.copy_to_container(
+            container=container,
+            dest_path="/workspace/requirements.txt",
+            src_path=os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), 'inner-requirements.txt'
+            ),
+        )
 
         container.exec_run(
-            f'bash -c "cd /workspace && cat > testUnittest.py << \'EOF\'\n{test_str}\nEOF\n"'
+            'bash -c "/openhands/micromamba/envs/openhands/bin/pip install -r requirements.txt"',
+            workdir='/workspace',
         )
 
         container.exec_run(
             'bash -c "/openhands/micromamba/envs/openhands/bin/python3 -m unittest testUnittest.py 2> logUnittest.txt"',
-            workdir='/workspace'
+            workdir='/workspace',
         )
 
         container.exec_run(
             'bash -c "tail -1 ./logUnittest.txt > resultUnittest.txt"',
-            workdir='/workspace'
+            workdir='/workspace',
         )
 
         zip_bytes = self._download_code(context_id)
@@ -109,9 +161,7 @@ class InferenceRunner:
 
     def evaluate_result(self) -> None:
         results = {}
-        out_dest = os.path.join(
-            self.output_dir, 'MasBench-A2A', 'tasks'
-        )
+        out_dest = os.path.join(self.output_dir, 'MasBench-A2A', 'tasks')
         dir_list = os.listdir(out_dest)
         for dir in dir_list:
             with open(os.path.join(out_dest, dir, "resultUnittest.txt"), 'r') as f:
@@ -125,20 +175,33 @@ class InferenceRunner:
                 f.write(f"{k}: {results[k]}")
 
     async def run(self) -> None:
-        self.pre_run_functions()
+        self.run_pre_functions()
         self.load_data()
         self.setup_agent()
-        for _, entry in self.data.iterrows():
+        for _, entry in tqdm.tqdm(self.data.iterrows(), total=self.data.shape[0]):
             await self.process_task(entry)
         self.evaluate_result()
-        self.post_run_functions()
+        self.run_post_functions()
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Run inference on MasBench dataset using OpenHands agent.")
-    parser.add_argument("--agent-url", default="http://127.0.0.1:3000", help="Base URL of the A2A agent (default: http://127.0.0.1:3000)")
-    parser.add_argument("--dataset-path", help="Path to the CSV dataset file. If not provided, defaults to 'data/MasBench.csv' relative to this script.")
-    parser.add_argument("--output-dir", default="evaluation/evaluation_outputs/outputs", help="Directory to store evaluation outputs (default: evaluation/evaluation_outputs/outputs)")
+    parser = argparse.ArgumentParser(
+        description="Run inference on MasBench dataset using OpenHands agent."
+    )
+    parser.add_argument(
+        "--agent-url",
+        default="http://127.0.0.1:3000",
+        help="Base URL of the A2A agent (default: http://127.0.0.1:3000)",
+    )
+    parser.add_argument(
+        "--dataset-path",
+        help="Path to the CSV dataset file. If not provided, defaults to 'data/MasBench.csv' relative to this script.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="evaluation/evaluation_outputs/outputs",
+        help="Directory to store evaluation outputs (default: evaluation/evaluation_outputs/outputs)",
+    )
     args = parser.parse_args()
 
     if args.dataset_path is None:
@@ -148,9 +211,7 @@ async def main():
         dataset_path = args.dataset_path
 
     runner = InferenceRunner(
-        dataset_path=dataset_path,
-        agent_url=args.agent_url,
-        output_dir=args.output_dir
+        dataset_path=dataset_path, agent_url=args.agent_url, output_dir=args.output_dir
     )
     await runner.run()
 
