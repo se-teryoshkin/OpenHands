@@ -618,9 +618,10 @@ class LocalRuntime(ActionExecutionClient):
         return hosts
 
 
-def _python_bin_path():
-    # Derive environment paths using sys.executable
-    interpreter_path = sys.executable
+def _python_bin_path(interpreter_path: str | None = None) -> str:
+    if not interpreter_path:
+        # Derive environment paths using sys.executable
+        interpreter_path = sys.executable
     python_bin_path = os.path.dirname(interpreter_path)
     return python_bin_path
 
@@ -681,11 +682,14 @@ def _create_server(
     env['VSCODE_PORT'] = str(vscode_port)
 
     # Prepend the interpreter's bin directory to PATH for subprocesses
-    env['PATH'] = f'{_python_bin_path()}{os.pathsep}{env.get("PATH", "")}'
+    # TODO: Move interpreter path to sandbox settings
+    env['PATH'] = f'{_python_bin_path("/usr/local/bin/python")}{os.pathsep}{env.get("PATH", "")}'
 
     logger.debug(f'Updated PATH for subprocesses: {env["PATH"]}')
 
+    # Temporary fix for local runtime correct python usage
     env.pop('VIRTUAL_ENV', None)
+    env['PYTHONPATH'] = "/workspace"
 
     logger.debug(f'LocalRuntime env: {env}')
 
