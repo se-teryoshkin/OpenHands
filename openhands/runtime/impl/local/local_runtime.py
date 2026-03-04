@@ -685,6 +685,10 @@ def _create_server(
 
     logger.debug(f'Updated PATH for subprocesses: {env["PATH"]}')
 
+    env.pop('VIRTUAL_ENV', None)
+
+    logger.debug(f'LocalRuntime env: {env}')
+
     server_process = subprocess.Popen(  # noqa: S603
         cmd,
         stdout=subprocess.PIPE,
