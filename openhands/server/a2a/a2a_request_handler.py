@@ -186,6 +186,9 @@ class A2AOHTaskWrapper:
                                 event_id = metadata.get(f'{METADATA_NAME_PREFIX}/event-id')
                                 if event_id is not None and event_id != Event.INVALID_ID:
                                     self.last_streamed_event_id = event_id
+                    except Exception as e:
+                        logger.error(f'Error while streaming task {self.task_id}: {e}')
+                        raise e
                     finally:
                         q.task_done()
 
@@ -208,14 +211,14 @@ class A2AOHTaskWrapper:
                 try:
                     q.put_nowait(event)
                 except Exception as e:
-                    logger.error(f'Error while streaming task {self.task_id}: {e}')
+                    logger.error(f'Error while sending event to stream in task {self.task_id}: {e}')
             return
 
         for q in list(self._stream_queues):
             try:
                 loop.call_soon_threadsafe(q.put_nowait, event)
             except Exception as e:
-                logger.error(f'Error while streaming task {self.task_id}: {e}')
+                logger.error(f'Error while while sending event to stream in task {self.task_id}: {e}')
 
     def update_status(
             self,
