@@ -235,8 +235,6 @@ class A2AOHTaskWrapper:
         if self.status.state in TASK_TERMINAL_STATES:
             return
 
-        if self.status.state == state:
-            return
 
         self.status.state = state
 
@@ -407,7 +405,7 @@ class A2AOHTaskWrapper:
                 pass
 
         if self._stream_loop is not None and self._stream_queues:
-                self._send_event_to_stream(message)
+            self.update_status(state=self.status.state, message=message)
 
         if self.is_finished:
 
