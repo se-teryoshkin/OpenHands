@@ -5,6 +5,7 @@ import json
 import os
 from io import TextIOWrapper
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -17,10 +18,15 @@ from a2a.types import (
     Role,
     Task,
     TaskQueryParams,
+    TaskIdParams,
     TextPart,
 )
 
+from openhands.server.a2a.agent_card import agent_card
 from openhands.server.a2a.a2a_request_handler import TASK_TERMINAL_STATES
+
+
+TIMEOUT_SECONDS = 120.0
 
 def _normalize_base_url(base_url: str | None) -> str:
     value = (base_url or os.getenv('OPENHANDS_A2A_URL') or 'http://127.0.0.1:3000').strip()
@@ -28,26 +34,10 @@ def _normalize_base_url(base_url: str | None) -> str:
         value = f'http://{value}'
     return value.rstrip('/')
 
-def _get_agent_card(a2a_url: str) -> AgentCard:
-    return AgentCard(
-            name='OpenHands A2A',
-            description='OpenHands A2A endpoint',
-            url=a2a_url,
-            version='1.0.0',
-            default_input_modes=['text'],
-            default_output_modes=['text'],
-            capabilities=AgentCapabilities(streaming=True),
-            skills=[],
-        )
-def json_dumps(obj: Any) -> Any:
-    return json.dumps(obj, ensure_ascii=False, indent=2)
-
-def json_dump_file(obj: Any, f: TextIOWrapper) -> Any:
-    return json.dump(obj, f, ensure_ascii=False, indent=2)
-
-message = Message(
+def _get_message() -> Message:
+    return Message(
     role=Role.user,
-    message_id='msg',
+    message_id=uuid4().hex,
     parts=[
         Part(
             root=TextPart(
@@ -62,17 +52,43 @@ message = Message(
     }
 )
 
+async def _check_history_timeout(
+    client,
+    task_id: str,
+    task: Task,
+    timeout_state: dict[str, Any],
+) -> None:
+    current_event_id = None
+
+    if task.history:
+        current_event_id = (task.history[-1].metadata or {}).get('openhands/event-id')
+
+    now = asyncio.get_running_loop().time()
+
+    if current_event_id != timeout_state['last_event_id']:
+        timeout_state['last_event_id'] = current_event_id
+        timeout_state['last_change_at'] = now
+        return
+
+    if now - timeout_state['last_change_at'] >= TIMEOUT_SECONDS:
+        await client.cancel_task(TaskIdParams(id=task_id))
+        pytest.fail('Waiting for update in task exceed timeout')
+
+def json_dumps(obj: Any) -> Any:
+    return json.dumps(obj, ensure_ascii=False, indent=2)
+
+def json_dump_file(obj: Any, f: TextIOWrapper) -> Any:
+    return json.dump(obj, f, ensure_ascii=False, indent=2)
+
 
 @pytest.mark.asyncio
-async def test_a2a_message_send(base_url: str):
+async def test_a2a_message_send():
     os.makedirs('test-results', exist_ok=True)
 
-    resolved_base_url = _normalize_base_url(base_url)
-
-    print(f'Step 1: Connecting to A2A server via {resolved_base_url}/a2a...')
+    print(f'Step 1: Connecting to A2A server')
 
     client = await ClientFactory.connect(
-        agent=_get_agent_card(f"{resolved_base_url}/a2a"),
+        agent=agent_card,
         client_config=ClientConfig(streaming=False),
     )
 
@@ -81,7 +97,7 @@ async def test_a2a_message_send(base_url: str):
     task_id = None
     message_text = None
 
-    async for event in client.send_message(message):
+    async for event in client.send_message(_get_message()):
         if isinstance(event, tuple):
             task, update = event
 
@@ -117,8 +133,13 @@ async def test_a2a_message_send(base_url: str):
     print(f'Step 3: Polling tasks/get for task_id={task_id}...')
     last_task_dump = None
     final_state = None
+    task = None
+    timeout_state = {
+        'last_event_id': None,
+        'last_change_at': asyncio.get_running_loop().time(),
+    }
 
-    for attempt in range(60):
+    while True:
         task = await client.get_task(
             TaskQueryParams(
                 id=task_id,
@@ -137,9 +158,13 @@ async def test_a2a_message_send(base_url: str):
         if final_state in TASK_TERMINAL_STATES:
             break
 
+        await _check_history_timeout(
+            client=client,
+            task_id=task_id,
+            task=task,
+            timeout_state=timeout_state,
+        )
         await asyncio.sleep(2)
-    else:
-        pytest.fail('Task did not reach terminal state')
 
     assert last_task_dump is not None
 
@@ -155,15 +180,13 @@ async def test_a2a_message_send(base_url: str):
 
 
 @pytest.mark.asyncio
-async def test_a2a_message_stream(base_url: str):
+async def test_a2a_message_stream():
     os.makedirs('test-results', exist_ok=True)
 
-    resolved_base_url = _normalize_base_url(base_url)
-
-    print(f'Step 1: Connecting to A2A server via {resolved_base_url}/a2a...')
+    print(f'Step 1: Connecting to A2A server')
 
     client = await ClientFactory.connect(
-        agent=_get_agent_card(f"{resolved_base_url}/a2a"),
+        agent=agent_card,
         client_config=ClientConfig(streaming=True,
                                    httpx_client=httpx.AsyncClient(
                                        timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
@@ -176,7 +199,7 @@ async def test_a2a_message_stream(base_url: str):
     message_text = None
     saw_update = False
 
-    async for event in client.send_message(message):
+    async for event in client.send_message(_get_message()):
         if isinstance(event, tuple):
             task, update = event
 
