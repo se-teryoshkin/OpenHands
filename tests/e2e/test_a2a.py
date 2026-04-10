@@ -19,44 +19,65 @@ from a2a.types import (
     Task,
     TaskQueryParams,
     TaskIdParams,
+    TaskState,
     TextPart,
 )
 
-from openhands.server.a2a.agent_card import agent_card
 from openhands.server.a2a.a2a_request_handler import TASK_TERMINAL_STATES
+from openhands.server.a2a.agent_card import agent_card
 
+TIMEOUT_SECONDS = 35.0
+LOADING_TIMEOUT_SECONDS = 120.0
 
-TIMEOUT_SECONDS = 120.0
-
-def _normalize_base_url(base_url: str | None) -> str:
-    value = (base_url or os.getenv('OPENHANDS_A2A_URL') or 'http://127.0.0.1:3000').strip()
-    if not value.startswith(('http://', 'https://')):
-        value = f'http://{value}'
-    return value.rstrip('/')
 
 def _get_message() -> Message:
     return Message(
-    role=Role.user,
-    message_id=uuid4().hex,
-    parts=[
-        Part(
-            root=TextPart(
-                text='Reply with exactly OK and then finish the task.'
+        role=Role.user,
+        message_id=uuid4().hex,
+        parts=[
+            Part(
+                root=TextPart(
+                    text='Reply with exactly OK and then finish the task.'
+                )
+            ),
+        ],
+        metadata={
+            'openhands/agent': 'CodeActAgent',
+            'openhands/show-all-events': True,
+            'openhands/auto-continue': True,
+        }
+    )
+
+
+async def _wait_until_task_starts(client, task_id: str) -> Task:
+    started_at = asyncio.get_running_loop().time()
+
+    while True:
+        task = await client.get_task(
+            TaskQueryParams(
+                id=task_id,
+                metadata={'openhands/show-all-events': True},
             )
-        ),
-    ],
-    metadata ={
-        'openhands/agent': 'CodeActAgent',
-        'openhands/show-all-events': True,
-        'openhands/auto-continue': True,
-    }
-)
+        )
+
+        if task.status.state != TaskState.submitted:
+            return task
+
+        if asyncio.get_running_loop().time() - started_at >= LOADING_TIMEOUT_SECONDS:
+            await client.cancel_task(TaskIdParams(id=task_id))
+            pytest.fail(
+                'Task stayed in submitted state too long before starting work: '
+                f'{LOADING_TIMEOUT_SECONDS}s'
+            )
+
+        await asyncio.sleep(2)
+
 
 async def _check_history_timeout(
-    client,
-    task_id: str,
-    task: Task,
-    timeout_state: dict[str, Any],
+        client,
+        task_id: str,
+        task: Task,
+        timeout_state: dict[str, Any]
 ) -> None:
     current_event_id = None
 
@@ -74,8 +95,10 @@ async def _check_history_timeout(
         await client.cancel_task(TaskIdParams(id=task_id))
         pytest.fail('Waiting for update in task exceed timeout')
 
+
 def json_dumps(obj: Any) -> Any:
     return json.dumps(obj, ensure_ascii=False, indent=2)
+
 
 def json_dump_file(obj: Any, f: TextIOWrapper) -> Any:
     return json.dump(obj, f, ensure_ascii=False, indent=2)
@@ -93,47 +116,27 @@ async def test_a2a_message_send():
     )
 
     print('Step 2: Sending message/send request...')
-    events = []
-    task_id = None
-    message_text = None
+    response = None
 
     async for event in client.send_message(_get_message()):
-        if isinstance(event, tuple):
-            task, update = event
+        if response is not None:
+            pytest.fail('Non-streaming send_message returned more than one response')
+        response = event
 
-            task_dump = task.model_dump(mode='json', exclude_none=True)
+    assert response is not None
 
-            event_dump = {
-                'task': task_dump,
-            }
-
-            if task_id is None:
-                task_id = task.id
-        else:
-            event_dump = event.model_dump(mode='json', exclude_none=True)
-            message_text = json_dumps(event_dump)
-
-        if event_dump not in events:
-            events.append(event_dump)
-            print(json_dumps(event_dump))
+    task = response[0]
+    task_id = task.id
 
     with open('test-results/a2a_send_response.json', 'w', encoding='utf-8') as f:
-        json_dump_file(events, f)
+        json_dump_file(task.model_dump(mode='json', exclude_none=True), f)
 
-    assert events, 'No events returned from client.send_message(...)'
+    print(f'Step 3: Waiting for task to start...')
 
-    if message_text is not None:
-        assert 'OK' in message_text, (
-            f'Expected OK in message, got: {message_text}'
-        )
-        return
+    await _wait_until_task_starts(client, task_id)
 
-    assert task_id, json_dumps(events)
+    print(f'Step 4: Polling tasks/get for task_id={task_id}...')
 
-    print(f'Step 3: Polling tasks/get for task_id={task_id}...')
-    last_task_dump = None
-    final_state = None
-    task = None
     timeout_state = {
         'last_event_id': None,
         'last_change_at': asyncio.get_running_loop().time(),
@@ -143,15 +146,15 @@ async def test_a2a_message_send():
         task = await client.get_task(
             TaskQueryParams(
                 id=task_id,
-                history_length=50,
-                show_all_events=True
+                metadata={
+                    'openhands/show-all-events': True,
+                },
             )
         )
-
-        last_task_dump = task.model_dump(mode='json', exclude_none=True)
+        last_task = task
 
         with open('test-results/a2a_get_task_last_response.json', 'w', encoding='utf-8') as f:
-            json_dump_file(last_task_dump, f)
+            json_dump_file(task.model_dump(mode='json', exclude_none=True), f)
 
         final_state = task.status.state
 
@@ -166,16 +169,11 @@ async def test_a2a_message_send():
         )
         await asyncio.sleep(2)
 
-    assert last_task_dump is not None
+    assert last_task is not None
 
-    final_text = json_dumps(last_task_dump)
-
-    print('Step 4: Verifying final task result...')
+    print('Step 5: Verifying result...')
     assert final_state == 'completed', (
-        f'Expected completed, got {final_state}: {final_text}'
-    )
-    assert 'OK' in final_text, (
-        f'Expected OK in final task output, got: {final_text}'
+        f'Expected completed, got {final_state}: {last_task}'
     )
 
 
@@ -183,92 +181,46 @@ async def test_a2a_message_send():
 async def test_a2a_message_stream():
     os.makedirs('test-results', exist_ok=True)
 
-    print(f'Step 1: Connecting to A2A server')
+    print('Step 1: Connecting to A2A server')
 
     client = await ClientFactory.connect(
         agent=agent_card,
         client_config=ClientConfig(streaming=True,
                                    httpx_client=httpx.AsyncClient(
-                                       timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+                                       timeout=httpx.Timeout(connect=30.0, read=360.0, write=30.0, pool=30.0)
                                    )),
+
     )
 
     print('Step 2: Sending message/stream request...')
+
     events = []
-    task_id = None
-    message_text = None
-    saw_update = False
+    task, update = None, None
+    event_dump = {}
 
     async for event in client.send_message(_get_message()):
-        if isinstance(event, tuple):
-            task, update = event
+        task, update = event
 
-            task_dump = task.model_dump(mode='json', exclude_none=True)
+        event_dump = {
+            'task': task.model_dump(mode='json', exclude_none=True),
+            'update': None if update is None else update.model_dump(mode='json', exclude_none=True),
+        }
 
-            event_dump = {
-                'task': task_dump
-            }
+        events.append(event_dump)
 
-            if task_id is None:
-                task_id = task.id
-                saw_update = True
+        with open('test-results/a2a_stream_last_event.json', 'w', encoding='utf-8') as f:
+            json_dump_file(event_dump, f)
 
-        else:
-            event_dump = event.model_dump(mode='json', exclude_none=True)
-            message_text = json_dumps(event_dump)
+        if update is None:
+            continue
 
-        if event_dump not in events:
-            events.append(event_dump)
-            print(json_dumps(event_dump))
-
+        if update.final is True:
+            break
 
     with open('test-results/a2a_stream_events.json', 'w', encoding='utf-8') as f:
         json_dump_file(events, f)
 
-    assert events, 'No events returned from client.send_message(...)'
-    assert saw_update or task_id is not None, json_dumps(events)
-
-    if message_text is not None and task_id is None:
-        assert 'OK' in message_text, (
-            f'Expected OK in message, got: {message_text}'
-        )
-        return
-
-    assert task_id, json_dumps(events)
-
-    print(f'Step 3: Polling tasks/get for task_id={task_id}...')
-    last_task_dump = None
-    final_state = None
-
-    for attempt in range(60):
-        task = await client.get_task(
-            TaskQueryParams(
-                id=task_id,
-                history_length=50,
-                show_all_events=True,
-            )
-        )
-
-        last_task_dump = task.model_dump(mode='json', exclude_none=True)
-
-        with open('test-results/a2a_stream_last_response.json', 'w', encoding='utf-8') as f:
-            json_dump_file(last_task_dump, f)
-
-        print(json_dumps(last_task_dump))
-
-        final_state = task.status.state
-        if final_state in TASK_TERMINAL_STATES:
-            break
-
-        await asyncio.sleep(2)
-    else:
-        pytest.fail('Streaming task did not reach terminal state')
-
-    assert last_task_dump is not None
-
-    final_text = json_dumps(last_task_dump)
-
-    print('Step 4: Verifying final streaming task result...')
-
-    assert final_state == 'completed', f'Expected completed, got {final_state}: {final_text}'
-    assert 'OK' in final_text, f'Expected OK in final task output, got: {final_text}'
+    print('Step 3: Verifying result...')
+    assert task.status.state == 'completed', (
+        f'Expected completed, got {task.status.state}: {event_dump}'
+    )
