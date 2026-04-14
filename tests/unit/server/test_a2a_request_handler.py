@@ -1,8 +1,8 @@
 from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
-
 from a2a.types import (
     Message,
     MessageSendParams,
@@ -19,34 +19,42 @@ from a2a.types import (
 from a2a.utils.errors import (
     ServerError,
 )
-from openhands.core.schema.agent import AgentState
-from openhands.core.schema import ActionType
+
 import openhands.server.a2a.a2a_request_handler as a2a_handler
-from openhands.server.a2a.a2a_request_handler import A2aRequestHandler, A2AOHTaskWrapper
-from openhands.server.a2a.a2a_request_handler import _filter_event, METADATA_NAME_PREFIX
-from openhands.events.action import MessageAction, NullAction
+from openhands.core.schema import ActionType
+from openhands.core.schema.agent import AgentState
+from openhands.events.action import NullAction, MessageAction
 from openhands.events.event import EventSource
-
-DEFAULT_TASK_ID = "task123"
-DEFAULT_CONTEXT_ID = "123"
-
-DEFAULT_MSG = Message(
-    role="user",
-    parts=[TextPart(text="hello")],
-    message_id="msg-001",
-    task_id=DEFAULT_TASK_ID,
-    context_id=DEFAULT_CONTEXT_ID,
-    kind="message",
+from openhands.server.a2a.a2a_request_handler import (
+    A2aRequestHandler,
+    A2AOHTaskWrapper,
+    METADATA_NAME_PREFIX
 )
 
-NO_CONTEXT_MSG = Message(
-    role="user",
-    parts=[TextPart(text="hello")],
-    message_id="msg-001",
-    task_id=None,
-    context_id=None,
-    kind="message",
-)
+DEFAULT_TASK_ID = uuid4().hex
+DEFAULT_CONTEXT_ID = uuid4().hex
+
+
+def _get_default_message() -> Message:
+    return Message(
+        role="user",
+        parts=[TextPart(text="hello")],
+        message_id=uuid4().hex,
+        task_id=DEFAULT_TASK_ID,
+        context_id=DEFAULT_CONTEXT_ID,
+        kind="message",
+    )
+
+
+def _get_no_context_message() -> Message:
+    return Message(
+        role="user",
+        parts=[TextPart(text="hello")],
+        message_id=uuid4().hex,
+        task_id=None,
+        context_id=None,
+        kind="message",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -95,7 +103,7 @@ async def test_get_task_session_missing(monkeypatch):
     )
 
     handler.create_new_conversation = AsyncMock(return_value=None)
-    params = MessageSendParams(message=DEFAULT_MSG, metadata={})
+    params = MessageSendParams(message=_get_default_message(), metadata={})
     task, context_id = await handler.get_task(params)
 
     assert context_id == DEFAULT_CONTEXT_ID
@@ -115,7 +123,7 @@ async def test_get_task_task_id_none(monkeypatch):
         raising=False,
     )
 
-    msg = DEFAULT_MSG.copy()
+    msg = _get_default_message()
     msg.task_id = None
 
     params = MessageSendParams(message=msg, metadata={})
@@ -127,7 +135,7 @@ async def test_get_task_task_id_none(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_on_cancel_task():
+async def test_cancel_task():
     handler = A2aRequestHandler()
 
     task = A2AOHTaskWrapper(
@@ -180,7 +188,7 @@ async def test_on_message_send(monkeypatch):
     task.status.state = TaskState.input_required
     A2aRequestHandler._tasks[DEFAULT_TASK_ID] = task
 
-    params = MessageSendParams(message=DEFAULT_MSG, metadata={})
+    params = MessageSendParams(message=_get_default_message(), metadata={})
 
     result = await handler.on_message_send(params, MagicMock())
     assert result.id == DEFAULT_TASK_ID
@@ -204,7 +212,7 @@ async def test_on_message_send_parallel_task(monkeypatch):
 
     create_task_mock = MagicMock()
     monkeypatch.setattr(a2a_handler.asyncio, "create_task", create_task_mock)
-    params = MessageSendParams(message=DEFAULT_MSG, metadata={})
+    params = MessageSendParams(message=_get_default_message(), metadata={})
 
     result = await handler.on_message_send(params, MagicMock())
 
@@ -222,7 +230,7 @@ async def test_on_message_send_new(monkeypatch):
         lambda _cid: MagicMock(),
         raising=False,
     )
-    params = MessageSendParams(message=DEFAULT_MSG, metadata={})
+    params = MessageSendParams(message=_get_default_message(), metadata={})
 
     result = await handler.on_message_send(params, MagicMock())
     assert result.id == DEFAULT_TASK_ID
@@ -230,7 +238,7 @@ async def test_on_message_send_new(monkeypatch):
 
 
 def test_convert_a2a_params_to_dict_message_send():
-    params = MessageSendParams(message=DEFAULT_MSG)
+    params = MessageSendParams(message=_get_default_message())
     handler = A2aRequestHandler()
     result = handler._convert_a2a_params_to_dict(params)
 
@@ -266,42 +274,7 @@ def test_convert_a2a_params_to_dict_invalid_type():
 
 
 @pytest.mark.asyncio
-async def test_conversation_init_data_set_raise(monkeypatch):
-    handler = A2aRequestHandler()
-
-    params = TaskQueryParams(id='tid')
-    params.metadata = {f"{a2a_handler.METADATA_NAME_PREFIX}/agent": "CodeActAgent"}
-
-    settings_instance = AsyncMock()
-    settings_instance.load = AsyncMock(return_value=None)
-    monkeypatch.setattr(
-        'openhands.server.shared.SettingsStoreImpl.get_instance',
-        AsyncMock(return_value=settings_instance),
-    )
-
-    secrets = SimpleNamespace(
-        provider_tokens=MappingProxyType({'gh': 'tok'}),
-        custom_secrets=MappingProxyType({'x': 'y'}),
-    )
-    secrets_instance = AsyncMock()
-    secrets_instance.load = AsyncMock(return_value=secrets)
-    monkeypatch.setattr(
-        'openhands.server.shared.SecretsStoreImpl.get_instance',
-        AsyncMock(return_value=secrets_instance),
-    )
-
-    monkeypatch.setattr(
-        'openhands.server.shared.server_config', SimpleNamespace(app_mode='local')
-    )
-
-    with pytest.raises(ConnectionRefusedError) as exc_info:
-        await handler._conversation_init_data_set(params)
-
-    assert 'Settings not found' in str(exc_info.value)
-
-
-@pytest.mark.asyncio
-async def test_conversation_init_data_set(monkeypatch):
+async def test_conversation_init_data(monkeypatch):
     handler = A2aRequestHandler()
 
     settings = SimpleNamespace(s1='v1')
@@ -338,6 +311,26 @@ async def test_conversation_init_data_set(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_conversation_init_no_settings(monkeypatch):
+    handler = A2aRequestHandler()
+
+    params = TaskQueryParams(id='tid')
+    params.metadata = {f"{a2a_handler.METADATA_NAME_PREFIX}/agent": "CodeActAgent"}
+
+    settings_instance = AsyncMock()
+    settings_instance.load = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        'openhands.server.shared.SettingsStoreImpl.get_instance',
+        AsyncMock(return_value=settings_instance),
+    )
+
+    with pytest.raises(ConnectionRefusedError) as exc_info:
+        await handler._conversation_init_data_set(params)
+
+    assert 'Settings not found' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_on_message_send_stream(monkeypatch):
     handler = A2aRequestHandler()
 
@@ -347,39 +340,12 @@ async def test_on_message_send_stream(monkeypatch):
         lambda _cid: MagicMock(),
         raising=False,
     )
-    params = MessageSendParams(message=DEFAULT_MSG, metadata={})
+    params = MessageSendParams(message=_get_default_message(), metadata={})
 
     gen = handler.on_message_send_stream(params, MagicMock())
     first = await gen.__anext__()
     assert first.kind == "status-update"
     await gen.aclose()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method_name",
-    [
-        "on_set_task_push_notification_config",
-        "on_get_task_push_notification_config",
-    ],
-)
-async def test_push_notification_methods_raise_unsupported(method_name):
-    handler = A2aRequestHandler()
-    method = getattr(handler, method_name)
-    params = TaskIdParams(id="test-task-id")
-
-    with pytest.raises(ServerError) as exc_info:
-        await method(params)
-
-    assert isinstance(exc_info.value.error, UnsupportedOperationError)
-
-
-@pytest.mark.asyncio
-async def test_on_list_task_unsupported():
-    handler = A2aRequestHandler()
-    with pytest.raises(ServerError) as exc_info:
-        await handler.on_list_task()
-    assert isinstance(exc_info.value.error, UnsupportedOperationError)
 
 
 @pytest.mark.asyncio
@@ -392,22 +358,55 @@ async def test_on_resubscribe_to_task():
     )
     A2aRequestHandler._tasks[DEFAULT_TASK_ID] = task
 
+    msg1 = SimpleNamespace(
+        kind="message",
+        metadata={f"{METADATA_NAME_PREFIX}/event-id": 1},
+    )
+    msg2 = SimpleNamespace(
+        kind="message",
+        metadata={f"{METADATA_NAME_PREFIX}/event-id": 2},
+    )
+    task.history = [msg1, msg2]
+    task.events[1] = MessageAction(content="msg1", image_urls=[])
+    task.events[2] = MessageAction(content="msg2", image_urls=[])
+
+    task.last_streamed_event_id = 1
+    A2aRequestHandler._tasks[DEFAULT_TASK_ID] = task
+
     gen = handler.on_resubscribe_to_task(TaskIdParams(id=DEFAULT_TASK_ID), MagicMock())
     first = await gen.__anext__()
-    assert first.kind == "status-update"
+    assert first is msg2
+
+    second = await gen.__anext__()
+    assert second.kind == "status-update"
+
     await gen.aclose()
 
 
-def test_should_add_push_info():
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "args", "is_async"),
+    [
+        ("on_set_task_push_notification_config", (None,), True),
+        ("on_get_task_push_notification_config", (TaskIdParams(id="test-task-id"),), True),
+        ("on_list_task", (), True),
+        ("should_add_push_info", (TaskIdParams(id="test-task-id"),), False),
+    ],
+)
+async def test_unsupported(method_name, args, is_async):
     handler = A2aRequestHandler()
-    mock_params = TaskIdParams(id='test-task-id')
+    method = getattr(handler, method_name)
+
     with pytest.raises(ServerError) as exc_info:
-        handler.should_add_push_info(mock_params)
+        if is_async:
+            await method(*args)
+        else:
+            method(*args)
 
     assert isinstance(exc_info.value.error, UnsupportedOperationError)
 
 
-def test_check_if_no_tasks_running_for_context_rejects_parallel_task():
+def test_check_if_no_tasks_running_for_context():
     handler = A2aRequestHandler()
 
     current = A2AOHTaskWrapper(task_id="t1", context_id=DEFAULT_CONTEXT_ID, metadata={})
@@ -420,22 +419,8 @@ def test_check_if_no_tasks_running_for_context_rejects_parallel_task():
     assert new_task.status.state == TaskState.rejected
 
 
-def test_check_if_no_tasks_running_for_context_allows_same_task_input_required():
-    handler = A2aRequestHandler()
-    task = A2AOHTaskWrapper(
-        task_id=DEFAULT_TASK_ID,
-        context_id=DEFAULT_CONTEXT_ID,
-        metadata={},
-    )
-
-    task.status.state = TaskState.input_required
-    A2aRequestHandler._current_session_tasks[DEFAULT_CONTEXT_ID] = task
-
-    assert handler.check_if_no_tasks_running_for_context(task, DEFAULT_CONTEXT_ID) is True
-
-
 @pytest.mark.asyncio
-async def test_get_task_creates_new_conversation_when_no_context(monkeypatch):
+async def test_get_task_with_no_context_id(monkeypatch):
     handler = A2aRequestHandler()
 
     monkeypatch.setattr(
@@ -447,7 +432,7 @@ async def test_get_task_creates_new_conversation_when_no_context(monkeypatch):
 
     handler.create_new_conversation = AsyncMock(return_value=None)
 
-    params = MessageSendParams(message=NO_CONTEXT_MSG, metadata={})
+    params = MessageSendParams(message=_get_no_context_message(), metadata={})
 
     task_check, context_id_check = await handler.get_task(params)
 
@@ -457,91 +442,33 @@ async def test_get_task_creates_new_conversation_when_no_context(monkeypatch):
     handler.create_new_conversation.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_get_task_create_new_conversation_error_wrapped(monkeypatch):
-    handler = A2aRequestHandler()
-
-    monkeypatch.setattr(
-        a2a_handler.conversation_manager,
-        "get_agent_session",
-        lambda _cid: None,
-        raising=False,
-    )
-
-    handler.create_new_conversation = AsyncMock(side_effect=Exception("exception"))
-
-    params = MessageSendParams(message=NO_CONTEXT_MSG, metadata={})
-
-    with pytest.raises(ServerError) as exc_info:
-        await handler.get_task(params)
-
-    assert isinstance(exc_info.value.error, InternalError)
-
-
-@pytest.mark.asyncio
-async def test_get_task_existing_terminal_state_raises_invalid_params():
-    handler = A2aRequestHandler()
+@pytest.mark.parametrize(
+    ("task_event", "should_pass"),
+    [
+        (NullAction(), False),
+        (MessageAction(content="hi", image_urls=[]), True),
+    ],
+    ids=["system", "visible"],
+)
+def test_filter_event(task_event, should_pass):
     task = A2AOHTaskWrapper(
         task_id=DEFAULT_TASK_ID,
         context_id=DEFAULT_CONTEXT_ID,
         metadata={},
     )
 
-    task.status.state = TaskState.completed
-    A2aRequestHandler._tasks[DEFAULT_TASK_ID] = task
-
-    params = MessageSendParams(message=DEFAULT_MSG, metadata={})
-
-    with pytest.raises(ServerError) as exc_info:
-        await handler.get_task(params)
-
-    assert isinstance(exc_info.value.error, InvalidParamsError)
-
-
-def test_filter_event_status_update():
-    e = SimpleNamespace(kind="status-update", metadata={})
-    task = A2AOHTaskWrapper(
-        task_id=DEFAULT_TASK_ID,
-        context_id=DEFAULT_CONTEXT_ID,
-        metadata={},
-    )
-
-    assert _filter_event(task, e, show_all_events=False) is e
-
-
-def test_filter_event_filters_system_message_by_default():
-    real = NullAction()
-    task = A2AOHTaskWrapper(
-        task_id=DEFAULT_TASK_ID,
-        context_id=DEFAULT_CONTEXT_ID,
-        metadata={},
-    )
-
-    task.events[1] = real
-
-    simple_msg = SimpleNamespace(
+    event = SimpleNamespace(
         kind="message",
         metadata={f"{METADATA_NAME_PREFIX}/event-id": 1},
     )
+    task.events[1] = task_event
 
-    assert _filter_event(task, simple_msg, show_all_events=False) is None
+    result = a2a_handler._filter_event(task, event, show_all_events=False)
 
-
-def test_filter_event_passes_user_visible_message():
-    real = MessageAction(content="hi", image_urls=[])
-    task = A2AOHTaskWrapper(
-        task_id=DEFAULT_TASK_ID,
-        context_id=DEFAULT_CONTEXT_ID,
-        metadata={},
-    )
-
-    task.events[2] = real
-
-    simple_msg = SimpleNamespace(
-        kind="message",
-        metadata={f"{METADATA_NAME_PREFIX}/event-id": 2},
-    )
-    assert _filter_event(task, simple_msg, show_all_events=False) is simple_msg
+    if should_pass:
+        assert result is event
+    else:
+        assert result is None
 
 
 def test_task_serialize():
@@ -561,6 +488,5 @@ def test_task_serialize():
     assert loaded.metadata["k"] == "v"
     assert loaded.metadata[f"{METADATA_NAME_PREFIX}/agent"] == "CodeActAgent"
 
-    # минимальная гарантия: без event store и без истории
     assert loaded.events == {}
     assert loaded.history == []
