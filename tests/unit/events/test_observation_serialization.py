@@ -19,7 +19,7 @@ from openhands.events.serialization.observation import observation_from_dict
 
 
 def serialization_deserialization(
-    original_observation_dict, cls, max_message_chars: int = 10000
+        original_observation_dict, cls, max_message_chars: int = 10000
 ):
     observation_instance = event_from_dict(original_observation_dict)
     assert isinstance(observation_instance, Observation), (
@@ -43,6 +43,7 @@ def test_observation_event_props_serialization_deserialization():
     original_observation_dict = {
         'id': 42,
         'source': 'agent',
+        'event_type': 'CmdOutputObservation',
         'timestamp': '2021-08-01T12:00:00',
         'observation': 'run',
         'message': 'Command `ls -l` executed with exit code 0.',
@@ -69,6 +70,7 @@ def test_observation_event_props_serialization_deserialization():
 def test_command_output_observation_serialization_deserialization():
     original_observation_dict = {
         'observation': 'run',
+        'event_type': 'CmdOutputObservation',
         'extras': {
             'command': 'ls -l',
             'hidden': False,
@@ -171,6 +173,7 @@ def test_legacy_serialization():
     original_observation_dict = {
         'id': 42,
         'source': 'agent',
+        'event_type': 'CmdOutputObservation',
         'timestamp': '2021-08-01T12:00:00',
         'observation': 'run',
         'message': 'Command `ls -l` executed with exit code 0.',
@@ -202,6 +205,7 @@ def test_legacy_serialization():
 def test_file_edit_observation_serialization():
     original_observation_dict = {
         'observation': 'edit',
+        'event_type': 'FileEditObservation',
         'extras': {
             '_diff_cache': None,
             'impl_source': FileEditSource.LLM_BASED_EDIT,
@@ -220,6 +224,7 @@ def test_file_edit_observation_serialization():
 def test_file_edit_observation_new_file_serialization():
     original_observation_dict = {
         'observation': 'edit',
+        'event_type': 'FileEditObservation',
         'content': '[New file /path/to/newfile.txt is created with the provided content.]',
         'extras': {
             '_diff_cache': None,
@@ -239,6 +244,7 @@ def test_file_edit_observation_new_file_serialization():
 def test_file_edit_observation_oh_aci_serialization():
     original_observation_dict = {
         'observation': 'edit',
+        'event_type': 'FileEditObservation',
         'content': 'The file /path/to/file.txt is edited with the provided content.',
         'extras': {
             '_diff_cache': None,
@@ -258,6 +264,7 @@ def test_file_edit_observation_legacy_serialization():
     original_observation_dict = {
         'observation': 'edit',
         'content': 'content',
+        'event_type': 'FileEditObservation',
         'extras': {
             'path': '/workspace/game_2048.py',
             'prev_exist': False,
@@ -290,6 +297,7 @@ def test_file_edit_observation_legacy_serialization():
 def test_microagent_observation_serialization():
     original_observation_dict = {
         'observation': 'recall',
+        'event_type': 'RecallObservation',
         'content': '',
         'message': 'Added workspace context',
         'extras': {
@@ -313,6 +321,7 @@ def test_microagent_observation_serialization():
 def test_microagent_observation_microagent_knowledge_serialization():
     original_observation_dict = {
         'observation': 'recall',
+        'event_type': 'RecallObservation',
         'content': '',
         'message': 'Added microagent knowledge',
         'extras': {
@@ -417,8 +426,8 @@ def test_microagent_observation_environment_serialization():
         'localhost': 5000,
     }
     assert (
-        serialized['extras']['additional_agent_instructions']
-        == 'You know it all about this runtime'
+            serialized['extras']['additional_agent_instructions']
+            == 'You know it all about this runtime'
     )
     # Deserialize back to RecallObservation
     deserialized = observation_from_dict(serialized)
@@ -430,8 +439,8 @@ def test_microagent_observation_environment_serialization():
     assert deserialized.repo_instructions == original.repo_instructions
     assert deserialized.runtime_hosts == original.runtime_hosts
     assert (
-        deserialized.additional_agent_instructions
-        == original.additional_agent_instructions
+            deserialized.additional_agent_instructions
+            == original.additional_agent_instructions
     )
     # Check that knowledge microagent fields are empty
     assert deserialized.microagent_knowledge == []
@@ -469,12 +478,12 @@ def test_microagent_observation_combined_serialization():
     assert serialized['extras']['recall_type'] == RecallType.WORKSPACE_CONTEXT.value
     assert serialized['extras']['repo_name'] == 'OpenHands'
     assert (
-        serialized['extras']['microagent_knowledge'][0]['name']
-        == 'python_best_practices'
+            serialized['extras']['microagent_knowledge'][0]['name']
+            == 'python_best_practices'
     )
     assert (
-        serialized['extras']['additional_agent_instructions']
-        == 'You know it all about this runtime'
+            serialized['extras']['additional_agent_instructions']
+            == 'You know it all about this runtime'
     )
     # Deserialize back to RecallObservation
     deserialized = observation_from_dict(serialized)
@@ -488,8 +497,8 @@ def test_microagent_observation_combined_serialization():
     assert deserialized.repo_instructions == original.repo_instructions
     assert deserialized.runtime_hosts == original.runtime_hosts
     assert (
-        deserialized.additional_agent_instructions
-        == original.additional_agent_instructions
+            deserialized.additional_agent_instructions
+            == original.additional_agent_instructions
     )
 
     # Knowledge microagent properties

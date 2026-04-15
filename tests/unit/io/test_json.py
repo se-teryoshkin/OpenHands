@@ -14,6 +14,7 @@ def test_event_serialization_deserialization():
         'id': 42,
         'timestamp': '2020-01-01T23:59:58',
         'action': 'message',
+        'event_type': 'MessageAction',
         'message': 'This is a test.',
         'args': {
             'content': 'This is a test.',
@@ -37,6 +38,7 @@ def test_array_serialization_deserialization():
             'id': 42,
             'timestamp': '2020-01-01T00:00:00',
             'action': 'message',
+            'event_type': 'MessageAction',
             'message': 'This is a test.',
             'args': {
                 'content': 'This is a test.',
