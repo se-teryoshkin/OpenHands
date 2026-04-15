@@ -20,7 +20,7 @@ from openhands.events.serialization import (
 
 
 def serialization_deserialization(
-    original_action_dict, cls, max_message_chars: int = 10000
+        original_action_dict, cls, max_message_chars: int = 10000
 ):
     action_instance = event_from_dict(original_action_dict)
     assert isinstance(action_instance, Action), (
@@ -46,6 +46,7 @@ def test_event_props_serialization_deserialization():
         'source': 'agent',
         'timestamp': '2021-08-01T12:00:00',
         'action': 'message',
+        'event_type': 'MessageAction',
         'args': {
             'content': 'This is a test.',
             'image_urls': None,
@@ -60,6 +61,7 @@ def test_event_props_serialization_deserialization():
 def test_message_action_serialization_deserialization():
     original_action_dict = {
         'action': 'message',
+        'event_type': 'MessageAction',
         'args': {
             'content': 'This is a test.',
             'image_urls': None,
@@ -74,10 +76,11 @@ def test_message_action_serialization_deserialization():
 def test_agent_finish_action_serialization_deserialization():
     original_action_dict = {
         'action': 'finish',
+        'event_type': 'AgentFinishAction',
         'args': {
             'outputs': {},
             'thought': '',
-            'final_thought': '',
+            'final_thought': ''
         },
     }
     serialization_deserialization(original_action_dict, AgentFinishAction)
@@ -87,6 +90,7 @@ def test_agent_finish_action_legacy_task_completed_serialization():
     """Test that old conversations with task_completed can still be loaded."""
     original_action_dict = {
         'action': 'finish',
+        'event_type': 'AgentFinishAction',
         'args': {
             'outputs': {},
             'thought': '',
@@ -110,6 +114,7 @@ def test_agent_finish_action_legacy_task_completed_serialization():
 def test_agent_reject_action_serialization_deserialization():
     original_action_dict = {
         'action': 'reject',
+        'event_type': 'AgentRejectAction',
         'args': {'outputs': {}, 'thought': ''},
     }
     serialization_deserialization(original_action_dict, AgentRejectAction)
@@ -118,6 +123,7 @@ def test_agent_reject_action_serialization_deserialization():
 def test_cmd_run_action_serialization_deserialization():
     original_action_dict = {
         'action': 'run',
+        'event_type': 'CmdRunAction',
         'args': {
             'blocking': False,
             'command': 'echo "Hello world"',
@@ -136,6 +142,7 @@ def test_cmd_run_action_serialization_deserialization():
 def test_browse_url_action_serialization_deserialization():
     original_action_dict = {
         'action': 'browse',
+        'event_type': 'BrowseURLAction',
         'args': {
             'thought': '',
             'url': 'https://www.example.com',
@@ -149,6 +156,7 @@ def test_browse_url_action_serialization_deserialization():
 def test_browse_interactive_action_serialization_deserialization():
     original_action_dict = {
         'action': 'browse_interactive',
+        'event_type': 'BrowseInteractiveAction',
         'args': {
             'thought': '',
             'browser_actions': 'goto("https://www.example.com")',
@@ -163,6 +171,7 @@ def test_browse_interactive_action_serialization_deserialization():
 def test_file_read_action_serialization_deserialization():
     original_action_dict = {
         'action': 'read',
+        'event_type': 'FileReadAction',
         'args': {
             'path': '/path/to/file.txt',
             'start': 0,
@@ -179,6 +188,7 @@ def test_file_read_action_serialization_deserialization():
 def test_file_write_action_serialization_deserialization():
     original_action_dict = {
         'action': 'write',
+        'event_type': 'FileWriteAction',
         'args': {
             'path': '/path/to/file.txt',
             'content': 'Hello world',
@@ -194,6 +204,7 @@ def test_file_write_action_serialization_deserialization():
 def test_file_edit_action_aci_serialization_deserialization():
     original_action_dict = {
         'action': 'edit',
+        'event_type': 'FileEditAction',
         'args': {
             'path': '/path/to/file.txt',
             'command': 'str_replace',
@@ -215,6 +226,7 @@ def test_file_edit_action_aci_serialization_deserialization():
 def test_file_edit_action_llm_serialization_deserialization():
     original_action_dict = {
         'action': 'edit',
+        'event_type': 'FileEditAction',
         'args': {
             'path': '/path/to/file.txt',
             'command': None,
@@ -236,6 +248,7 @@ def test_file_edit_action_llm_serialization_deserialization():
 def test_cmd_run_action_legacy_serialization():
     original_action_dict = {
         'action': 'run',
+        'event_type': 'CmdRunAction',
         'args': {
             'blocking': False,
             'command': 'echo "Hello world"',
@@ -255,7 +268,7 @@ def test_cmd_run_action_legacy_serialization():
     event_dict = event_to_dict(event)
     assert 'keep_prompt' not in event_dict['args']
     assert (
-        event_dict['args']['confirmation_state'] == ActionConfirmationStatus.CONFIRMED
+            event_dict['args']['confirmation_state'] == ActionConfirmationStatus.CONFIRMED
     )
     assert event_dict['args']['blocking'] is False
     assert event_dict['args']['command'] == 'echo "Hello world"'
@@ -266,6 +279,7 @@ def test_cmd_run_action_legacy_serialization():
 def test_file_llm_based_edit_action_legacy_serialization():
     original_action_dict = {
         'action': 'edit',
+        'event_type': 'FileEditAction',
         'args': {
             'path': '/path/to/file.txt',
             'content': 'dummy content',
@@ -322,6 +336,7 @@ def test_file_llm_based_edit_action_legacy_serialization():
 def test_file_ohaci_edit_action_legacy_serialization():
     original_action_dict = {
         'action': 'edit',
+        'event_type': 'FileEditAction',
         'args': {
             'path': '/workspace/game_2048.py',
             'content': '',
@@ -339,8 +354,8 @@ def test_file_ohaci_edit_action_legacy_serialization():
     # Common arguments
     assert event.path == '/workspace/game_2048.py'
     assert (
-        event.thought
-        == "I'll help you create a simple 2048 game in Python. I'll use the str_replace_editor to create the file."
+            event.thought
+            == "I'll help you create a simple 2048 game in Python. I'll use the str_replace_editor to create the file."
     )
     assert event.impl_source == FileEditSource.OH_ACI
     assert not hasattr(event, 'translated_ipython_code')
@@ -364,8 +379,8 @@ def test_file_ohaci_edit_action_legacy_serialization():
     assert event_dict['args']['path'] == '/workspace/game_2048.py'
     assert event_dict['args']['impl_source'] == 'oh_aci'
     assert (
-        event_dict['args']['thought']
-        == "I'll help you create a simple 2048 game in Python. I'll use the str_replace_editor to create the file."
+            event_dict['args']['thought']
+            == "I'll help you create a simple 2048 game in Python. I'll use the str_replace_editor to create the file."
     )
 
     # OH_ACI arguments
@@ -384,6 +399,7 @@ def test_file_ohaci_edit_action_legacy_serialization():
 def test_agent_microagent_action_serialization_deserialization():
     original_action_dict = {
         'action': 'recall',
+        'event_type': 'RecallAction',
         'args': {
             'query': 'What is the capital of France?',
             'thought': 'I need to find information about France',
@@ -396,6 +412,7 @@ def test_agent_microagent_action_serialization_deserialization():
 def test_file_read_action_legacy_serialization():
     original_action_dict = {
         'action': 'read',
+        'event_type': 'RecallAction',
         'args': {
             'path': '/workspace/test.txt',
             'start': 0,
@@ -426,7 +443,7 @@ def test_file_read_action_legacy_serialization():
     event_dict = event_to_dict(event)
     assert 'translated_ipython_code' not in event_dict['args']
     assert (
-        'command' not in event_dict['args']
+            'command' not in event_dict['args']
     )  # command should not be in serialized args
 
     # Common arguments in serialized form
